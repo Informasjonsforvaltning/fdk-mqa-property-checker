@@ -1,0 +1,101 @@
+use std::collections::HashMap;
+use std::env;
+
+use log::warn;
+
+use cached::proc_macro::cached;
+
+use serde_derive::Deserialize;
+
+use crate::utils::strip_http_scheme;
+
+const DEFAULT_BASE_URL: &str = "https://data.norge.no/new-reference-data";
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MediaTypeCollection {
+    #[serde(rename = "mediaTypes")]
+    pub media_types: Vec<MediaType>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MediaType {
+    pub uri: String,
+    pub name: String,
+    pub r#type: String,
+    #[serde(rename = "subType")]
+    pub sub_type: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileTypeCollection {
+    #[serde(rename = "fileTypes")]
+    pub file_types: Vec<FileType>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileType {
+    pub uri: String,
+    pub code: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+}
+
+pub fn valid_media_type(media_type: String) -> bool {
+    match get_remote_media_types() {
+        Some(media_types) => media_types.contains_key(strip_http_scheme(media_type).as_str()),
+        None => false,
+    }
+}
+
+pub fn valid_file_type(file_type: String) -> bool {
+    match get_remote_file_types() {
+        Some(file_types) => file_types.contains_key(strip_http_scheme(file_type).as_str()),
+        None => false,
+    }
+}
+
+#[cached(time = 86400)]
+pub fn get_remote_media_types() -> Option<HashMap<String, MediaType>> {
+    let base_url = env::var("REFERENCE_DATA_BASE_URL").unwrap_or(DEFAULT_BASE_URL.to_string());
+    match reqwest::blocking::get(format!("{}/iana/media-types", base_url).as_str()) {
+        Ok(resp) => match resp.json::<MediaTypeCollection>() {
+            Ok(json) => Some(
+                json.media_types
+                    .into_iter()
+                    .map(|ft| (strip_http_scheme(ft.uri.clone()), ft))
+                    .collect::<HashMap<String, MediaType>>(),
+            ),
+            Err(e) => {
+                warn!("Cannot get remote media-types {}", e);
+                None
+            }
+        },
+        Err(e) => {
+            warn!("Cannot get remote media-types {}", e);
+            None
+        }
+    }
+}
+
+#[cached(time = 86400)]
+pub fn get_remote_file_types() -> Option<HashMap<String, FileType>> {
+    let base_url = env::var("REFERENCE_DATA_BASE_URL").unwrap_or(DEFAULT_BASE_URL.to_string());
+    match reqwest::blocking::get(format!("{}/eu/file-types", base_url).as_str()) {
+        Ok(resp) => match resp.json::<FileTypeCollection>() {
+            Ok(json) => Some(
+                json.file_types
+                    .into_iter()
+                    .map(|ft| (strip_http_scheme(ft.uri.clone()), ft))
+                    .collect::<HashMap<String, FileType>>(),
+            ),
+            Err(e) => {
+                warn!("Cannot get remote file-types {}", e);
+                None
+            }
+        },
+        Err(e) => {
+            warn!("Cannot get remote file-types {}", e);
+            None
+        }
+    }
+}

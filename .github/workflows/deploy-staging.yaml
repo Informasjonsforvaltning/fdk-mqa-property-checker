@@ -1,0 +1,117 @@
+name: Deploy to staging
+
+on:
+  pull_request:
+    types: [ready_for_review, opened, reopened, synchronize]
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run tests when pull request is created
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+          profile: minimal
+
+      - name: Run tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all   
+        env:
+          CARGO_INCREMENTAL: '0'
+          RUSTFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
+          RUSTDOCFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
+
+      - name: Test coverage  
+        uses: actions-rs/grcov@v0.1
+        with:
+          config: ./grcov.yml
+
+      - name: Codecov upload
+        uses: codecov/codecov-action@v2
+        with:
+          files: ./lcov.txt
+
+  build:
+    name: Build when pull request is created
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v0
+        with:
+          service_account_email: ${{ secrets.GCP_SA_DIGDIR_FDK_GCR_EMAIL }}
+          service_account_key: ${{ secrets.GCP_SA_DIGDIR_FDK_GCR_KEY }}
+
+      - name: Configure docker to use the gcloud command-line tool as a credential helper
+        run: gcloud auth configure-docker eu.gcr.io
+
+      
+      - name: Build Docker image with GitHub commit sha tag
+        run: docker build . -t eu.gcr.io/digdir-fdk-infra/fdk-mqa-property-checker:$GITHUB_SHA -t eu.gcr.io/digdir-fdk-infra/fdk-mqa-property-checker:staging_latest
+
+      - name: Publish docker image to Google Cloud
+        run: docker -- push eu.gcr.io/digdir-fdk-infra/fdk-mqa-property-checker -a
+
+  deploy:
+    name: Deploy to staging environment when pull request is created
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v0
+        with:
+          service_account_email: ${{ secrets.GCP_SA_DIGDIR_FDK_GCR_EMAIL }}
+          service_account_key: ${{ secrets.GCP_SA_DIGDIR_FDK_GCR_KEY }}
+
+      - name: Configure docker to use the gcloud command-line tool as a credential helper
+        run: gcloud auth configure-docker eu.gcr.io
+
+      - name: Apply Helm template
+        run: |
+          helm repo add fdk https://informasjonsforvaltning.github.io/helm-chart/
+          helm fetch --untar --untardir ./helm fdk/fdk-mqa-property-checker
+          helm template --set DOCKER_IMAGE_NAME="eu.gcr.io/digdir-fdk-infra/fdk-mqa-property-checker:$GITHUB_SHA" -f ./helm/fdk-mqa-property-checker/values/staging.yaml ./helm/fdk-mqa-property-checker/ > ./kubectlapply.yaml
+          chmod o+w ./kubectlapply.yaml
+          cat kubectlapply.yaml
+      - name: Get kubeconfig file from GKE
+        uses: machine-learning-apps/gke-kubeconfig@master
+        with:
+          application_credentials: ${{ secrets.DIGDIR_FDK_DEV_AUTODEPLOY }}
+          project_id: digdir-fdk-dev
+          location_zone: europe-north1-a
+          cluster_name: digdir-fdk-dev
+
+      - name: Deploy to staging
+        uses: docker://bitnami/kubectl:latest
+        env:
+          KUBECONFIG: '/github/workspace/.kube/config'
+        with:
+          args: "apply -f ./kubectlapply.yaml --force"
+
+      - name: Notify slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          author_name: 'Application: fdk-mqa-property-checker | Environment: staging'
+          fields: commit,author,workflow
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: always()
+  
