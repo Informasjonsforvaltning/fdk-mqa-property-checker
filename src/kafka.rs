@@ -13,8 +13,8 @@ use rdkafka::message::{BorrowedMessage, OwnedMessage};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::Message;
 
-use schema_registry_converter::blocking::avro::{AvroDecoder, AvroEncoder};
-use schema_registry_converter::blocking::schema_registry::SrSettings;
+use schema_registry_converter::async_impl::avro::{AvroDecoder, AvroEncoder};
+use schema_registry_converter::async_impl::schema_registry::SrSettings;
 use schema_registry_converter::schema_registry_common::SubjectNameStrategy;
 
 use std::format;
@@ -82,10 +82,7 @@ pub async fn run_async_processor(
                 // The body of this block will be executed on the main thread pool,
                 // but we perform `expensive_computation` on a separate thread pool
                 // for CPU-intensive tasks via `tokio::task::spawn_blocking`.
-                let mqa_event =
-                    tokio::task::spawn_blocking(|| handle_dataset_event(owned_message, decoder))
-                        .await
-                        .expect("failed to wait for handle dataset-event");
+                let mqa_event = handle_dataset_event(owned_message, decoder).await;
 
                 match mqa_event {
                     Ok(Some(evt)) => {
@@ -94,7 +91,7 @@ pub async fn run_async_processor(
                             String::from("no.fdk.mqa.MQAEvent"),
                         );
 
-                        match encoder.encode_struct(evt, &schema_strategy) {
+                        match encoder.encode_struct(evt, &schema_strategy).await {
                             Ok(encoded_payload) => {
                                 let record: FutureRecord<String, Vec<u8>> =
                                     FutureRecord::to(&output_topic).payload(&encoded_payload);
@@ -137,11 +134,11 @@ async fn record_owned_message_receipt(_msg: &OwnedMessage) {
     // convenient than a `BorrowedMessage`.
 }
 
-fn parse_dataset_event(
+async fn parse_dataset_event(
     msg: OwnedMessage,
-    mut decoder: AvroDecoder,
+    mut decoder: AvroDecoder<'_>,
 ) -> Result<DatasetEvent, String> {
-    match decoder.decode(msg.payload()) {
+    match decoder.decode(msg.payload()).await {
         Ok(result) => match result.name {
             Some(name) => match name.name.as_str() {
                 "DatasetEvent" => match name.namespace {
@@ -163,13 +160,13 @@ fn parse_dataset_event(
 }
 
 // Read DatasetEvent message of type DATASET_HARVESTED
-fn handle_dataset_event(
+async fn handle_dataset_event(
     msg: OwnedMessage,
-    decoder: AvroDecoder,
+    decoder: AvroDecoder<'_>,
 ) -> Result<Option<MQAEvent>, String> {
     info!("Handle DatasetEvent on message {}", msg.offset());
 
-    let dataset_event = parse_dataset_event(msg, decoder);
+    let dataset_event = parse_dataset_event(msg, decoder).await;
 
     match dataset_event {
         Ok(event) => match event.event_type {

@@ -7,8 +7,7 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 
 use log::info;
-
-use schema_registry_converter::blocking::schema_registry::SrSettings;
+use schema_registry_converter::async_impl::schema_registry::SrSettings;
 
 use crate::utils::setup_logger;
 
@@ -110,7 +109,7 @@ async fn main() {
         .build()
         .unwrap();
 
-    setup_schemas(&sr_settings);
+    setup_schemas(&sr_settings).await;
 
     (0..num_workers)
         .map(|_| {

@@ -1,6 +1,8 @@
 use log::{error, info};
-use schema_registry_converter::blocking::schema_registry::{post_schema, SrSettings};
-use schema_registry_converter::schema_registry_common::{SchemaType, SuppliedSchema};
+use schema_registry_converter::{
+    async_impl::schema_registry::{post_schema, SrSettings},
+    schema_registry_common::{SchemaType, SuppliedSchema},
+};
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -48,7 +50,7 @@ pub struct DatasetEvent {
     pub timestamp: i64,
 }
 
-pub fn setup_schemas(sr_settings: &SrSettings) {
+pub async fn setup_schemas(sr_settings: &SrSettings) {
     info!("Setting up schemas");
 
     let schema = SuppliedSchema {
@@ -77,7 +79,7 @@ pub fn setup_schemas(sr_settings: &SrSettings) {
         references: vec![],
     };
 
-    match post_schema(sr_settings, String::from("no.fdk.mqa.MQAEvent"), schema) {
+    match post_schema(sr_settings, String::from("no.fdk.mqa.MQAEvent"), schema).await {
         Ok(result) => {
             info!("Schema succesfully registered with id={}", result.id)
         }
