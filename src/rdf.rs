@@ -1,4 +1,4 @@
-use log::{info};
+use log::info;
 
 use oxigraph::io::GraphFormat;
 use oxigraph::model::vocab::{rdf, xsd};

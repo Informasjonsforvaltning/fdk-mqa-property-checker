@@ -4,7 +4,8 @@ use chrono::Utc;
 
 use log::{error, warn};
 
-use oxigraph::model::*;
+use oxigraph::model::vocab::rdf;
+use oxigraph::model::{BlankNode, NamedNodeRef, NamedOrBlankNodeRef, Quad, Term};
 use oxigraph::store::{StorageError, Store};
 
 use crate::schemas::{MQAEvent, MQAEventType};
@@ -109,6 +110,12 @@ fn calculate_metrics(dataset_node: NamedNodeRef, store: &Store) -> Result<Store,
                 metrics_store.insert(dist_quad.as_ref())?;
                 match convert_term_to_named_or_blank_node_ref(dist_quad.object.as_ref()) {
                     Some(dist_node) => {
+                        add_property(
+                            dist_node.into(),
+                            rdf::TYPE.into(),
+                            dcat::DISTRIBUTION_CLASS.into(),
+                            &metrics_store,
+                        )?;
                         calculate_distribution_metrics(dist_node, store, &metrics_store)?;
                     }
                     None => error!(
@@ -513,6 +520,7 @@ mod tests {
             _:8e39b6cb3cb549181bf3c325f50e5dea <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
             _:8e39b6cb3cb549181bf3c325f50e5dea <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#dateModifiedAvailability> .
             _:8e39b6cb3cb549181bf3c325f50e5dea <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#Distribution> .
             _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:1c1218bfecd7df884f256cbdcff24c8d .
             _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:232150fee40e4bcdc92b65b54f948654 .
             _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:33fb81ef67d1b18100de36153306a5e0 .
