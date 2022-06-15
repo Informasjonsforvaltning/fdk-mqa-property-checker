@@ -13,7 +13,8 @@ use lazy_static::lazy_static;
 use crate::utils::strip_http_scheme;
 
 lazy_static! {
-    pub static ref REFERENCE_DATA_BASE_URL: String = env::var("REFERENCE_DATA_BASE_URL").unwrap_or("https://data.norge.no/new-reference-data".to_string());
+    pub static ref REFERENCE_DATA_BASE_URL: String = env::var("REFERENCE_DATA_BASE_URL")
+        .unwrap_or("https://data.norge.no/new-reference-data".to_string());
     pub static ref REFERENCE_DATA_API_KEY: String =
         env::var("REFERENCE_DATA_API_KEY").unwrap_or("".to_string());
 }
@@ -63,7 +64,10 @@ pub fn valid_file_type(file_type: String) -> bool {
 
 fn construct_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert("X-API-KEY", HeaderValue::from_static(&REFERENCE_DATA_API_KEY));
+    headers.insert(
+        "X-API-KEY",
+        HeaderValue::from_static(&REFERENCE_DATA_API_KEY),
+    );
     headers
 }
 
