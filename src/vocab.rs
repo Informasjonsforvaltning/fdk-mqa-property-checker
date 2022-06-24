@@ -83,25 +83,30 @@ pub mod dcat_mqa {
     use oxigraph::model::NamedNodeRef;
 
     // Assessment
-    pub const DATASET_ASSESSMENT_CLASS: NamedNodeRef<'_> =
-        NamedNodeRef::new_unchecked("https://data.norge.no/vocabulary/dcatno-mqa#DatasetAssessment");
+    pub const DATASET_ASSESSMENT_CLASS: NamedNodeRef<'_> = NamedNodeRef::new_unchecked(
+        "https://data.norge.no/vocabulary/dcatno-mqa#DatasetAssessment",
+    );
 
-    pub const DISTRIBUTION_ASSESSMENT_CLASS: NamedNodeRef<'_> =
-        NamedNodeRef::new_unchecked("https://data.norge.no/vocabulary/dcatno-mqa#DistributionAssessment");
+    pub const DISTRIBUTION_ASSESSMENT_CLASS: NamedNodeRef<'_> = NamedNodeRef::new_unchecked(
+        "https://data.norge.no/vocabulary/dcatno-mqa#DistributionAssessment",
+    );
 
-    pub const HAS_DISTRIBUTION_ASSESSMENT: NamedNodeRef<'_> =
-        NamedNodeRef::new_unchecked("https://data.norge.no/vocabulary/dcatno-mqa#hasDistributionAssessment");   
+    pub const HAS_DISTRIBUTION_ASSESSMENT: NamedNodeRef<'_> = NamedNodeRef::new_unchecked(
+        "https://data.norge.no/vocabulary/dcatno-mqa#hasDistributionAssessment",
+    );
 
-    pub const CONTAINS_QUALITY_MEASUREMENT: NamedNodeRef<'_> =
-        NamedNodeRef::new_unchecked("https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement");
+    pub const CONTAINS_QUALITY_MEASUREMENT: NamedNodeRef<'_> = NamedNodeRef::new_unchecked(
+        "https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement",
+    );
 
-    pub const CONTAINS_QUALITY_ANNOTATION: NamedNodeRef<'_> =
-        NamedNodeRef::new_unchecked("https://data.norge.no/vocabulary/dcatno-mqa#containsQualityAnnotation");   
+    pub const CONTAINS_QUALITY_ANNOTATION: NamedNodeRef<'_> = NamedNodeRef::new_unchecked(
+        "https://data.norge.no/vocabulary/dcatno-mqa#containsQualityAnnotation",
+    );
 
     pub const ASSESSMENT_OF: NamedNodeRef<'_> =
-        NamedNodeRef::new_unchecked("https://data.norge.no/vocabulary/dcatno-mqa#assessmentOf");   
+        NamedNodeRef::new_unchecked("https://data.norge.no/vocabulary/dcatno-mqa#assessmentOf");
 
-    // Stars    
+    // Stars
     pub const ZERO_STARS: NamedNodeRef<'_> =
         NamedNodeRef::new_unchecked("https://data.norge.no/vocabulary/dcatno-mqa#zeroStars");
 
