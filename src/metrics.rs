@@ -1,15 +1,12 @@
-use std::{
-    env,
-    str
-};
+use std::{env, str};
 
 use chrono::Utc;
 
-use log::{warn};
+use log::warn;
 
 use oxigraph::{
-    model::{BlankNode, NamedNodeRef, Quad, Term, NamedNode},
-    store::{StorageError, Store}
+    model::{BlankNode, NamedNode, NamedNodeRef, Quad, Term},
+    store::{StorageError, Store},
 };
 
 use lazy_static::lazy_static;
@@ -23,15 +20,16 @@ use sha2::{
 use uuid::Uuid;
 
 use crate::{
-    schemas::{MQAEvent, MQAEventType},
-    reference_data::{valid_file_type, valid_media_type},
-    vocab::{dcat, dcat_mqa, dcterms, oa},
+    error::Error,
     rdf::{
         add_derived_from, add_five_star_annotation, add_property, add_quality_measurement,
-        dump_graph_as_turtle, insert_dataset_assessment, insert_distribution_assessment,
-        get_dataset_node, get_five_star_annotation, has_property, is_rdf_format, list_distributions,
-        list_formats, list_media_types, parse_turtle,
-    }, error::Error
+        dump_graph_as_turtle, get_dataset_node, get_five_star_annotation, has_property,
+        insert_dataset_assessment, insert_distribution_assessment, is_rdf_format,
+        list_distributions, list_formats, list_media_types, parse_turtle,
+    },
+    reference_data::{valid_file_type, valid_media_type},
+    schemas::{MQAEvent, MQAEventType},
+    vocab::{dcat, dcat_mqa, dcterms, oa},
 };
 
 lazy_static! {
@@ -85,7 +83,11 @@ pub fn parse_rdf_graph_and_calculate_metrics(
     }
 }
 
-fn calculate_metrics(fdk_id: String, dataset_node: NamedNodeRef, store: &Store) -> Result<Store, Error> {
+fn calculate_metrics(
+    fdk_id: String,
+    dataset_node: NamedNodeRef,
+    store: &Store,
+) -> Result<Store, Error> {
     let dataset_assessment = NamedNode::new(format!(
         "{}/assessments/datasets/{}",
         MQA_URI_BASE.clone(),
@@ -159,7 +161,12 @@ fn calculate_metrics(fdk_id: String, dataset_node: NamedNodeRef, store: &Store) 
             &metrics_store,
         )?;
 
-        calculate_distribution_metrics(distribution_assessment.as_ref(), distribution.as_ref(), store, &metrics_store)?;
+        calculate_distribution_metrics(
+            distribution_assessment.as_ref(),
+            distribution.as_ref(),
+            store,
+            &metrics_store,
+        )?;
     }
 
     match get_five_star_annotation(&metrics_store) {
@@ -396,8 +403,8 @@ fn calculate_distribution_metrics(
 mod tests {
     use crate::{utils::setup_logger, vocab::dcat_mqa};
 
-    use oxigraph::model::{Subject, vocab};
     use super::*;
+    use oxigraph::model::{vocab, Subject};
     use std::env;
 
     #[test]
@@ -627,7 +634,6 @@ mod tests {
             _:da6e2e0bdb700a746368ded59c8920f0 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> ."#,
         )).unwrap();
 
-        
         assert!(mqa_event.is_ok());
 
         let mqa_event_raw = mqa_event.unwrap();
@@ -641,18 +647,22 @@ mod tests {
                 .count()
         );
 
-        let dataset_assessment = store_actual.quads_for_pattern(
-            None,
-            Some(vocab::rdf::TYPE),
-            Some(dcat_mqa::DATASET_ASSESSMENT_CLASS.into()),
-            None,
-        ).next().and_then(|d| match d {
-            Ok(Quad {
-                subject: Subject::NamedNode(s),
-                ..
-            }) => Some(s),
-            _ => None,
-        }).unwrap();
+        let dataset_assessment = store_actual
+            .quads_for_pattern(
+                None,
+                Some(vocab::rdf::TYPE),
+                Some(dcat_mqa::DATASET_ASSESSMENT_CLASS.into()),
+                None,
+            )
+            .next()
+            .and_then(|d| match d {
+                Ok(Quad {
+                    subject: Subject::NamedNode(s),
+                    ..
+                }) => Some(s),
+                _ => None,
+            })
+            .unwrap();
 
         assert_eq!(
             1,
@@ -679,17 +689,17 @@ mod tests {
         );
 
         let dist_assessment_quad = store_actual
-        .quads_for_pattern(
-            Some(dataset_assessment.as_ref().into()),
-            Some(dcat_mqa::HAS_DISTRIBUTION_ASSESSMENT),
-            None,
-            None
-        )
+            .quads_for_pattern(
+                Some(dataset_assessment.as_ref().into()),
+                Some(dcat_mqa::HAS_DISTRIBUTION_ASSESSMENT),
+                None,
+                None,
+            )
             .next()
             .unwrap()
             .unwrap();
 
-        if let Term::NamedNode(node) = dist_assessment_quad.object.clone() {   
+        if let Term::NamedNode(node) = dist_assessment_quad.object.clone() {
             assert_eq!(
                 14,
                 store_actual

@@ -1,4 +1,3 @@
-
 use log::info;
 
 use oxigraph::io::GraphFormat;
@@ -7,8 +6,7 @@ use oxigraph::model::*;
 use oxigraph::store::{QuadIter, SerializerError, StorageError, Store};
 
 use crate::error::Error;
-use crate::vocab::{dcat, dcterms, dqv, prov, dcat_mqa};
-
+use crate::vocab::{dcat, dcat_mqa, dcterms, dqv, prov};
 
 /// Parse Turtle RDF and load into store
 pub fn parse_turtle(turtle: String) -> Result<Store, Error> {
