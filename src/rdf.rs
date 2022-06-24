@@ -1,3 +1,4 @@
+
 use log::info;
 
 use oxigraph::io::GraphFormat;
@@ -6,7 +7,8 @@ use oxigraph::model::*;
 use oxigraph::store::{QuadIter, SerializerError, StorageError, Store};
 
 use crate::error::Error;
-use crate::vocab::{dcat, dcterms, dqv, prov};
+use crate::vocab::{dcat, dcterms, dqv, prov, dcat_mqa};
+
 
 /// Parse Turtle RDF and load into store
 pub fn parse_turtle(turtle: String) -> Result<Store, Error> {
@@ -44,7 +46,7 @@ pub fn list_distributions(dataset: NamedNodeRef, store: &Store) -> QuadIter {
 }
 
 /// Retrieve distribution formats
-pub fn list_formats(distribution: NamedOrBlankNodeRef, store: &Store) -> QuadIter {
+pub fn list_formats(distribution: NamedNodeRef, store: &Store) -> QuadIter {
     store.quads_for_pattern(
         Some(distribution.into()),
         Some(dcterms::FORMAT.into()),
@@ -54,7 +56,7 @@ pub fn list_formats(distribution: NamedOrBlankNodeRef, store: &Store) -> QuadIte
 }
 
 /// Retrieve distribution media-types
-pub fn list_media_types(distribution: NamedOrBlankNodeRef, store: &Store) -> QuadIter {
+pub fn list_media_types(distribution: NamedNodeRef, store: &Store) -> QuadIter {
     store.quads_for_pattern(
         Some(distribution.into()),
         Some(dcat::MEDIA_TYPE.into()),
@@ -89,28 +91,6 @@ pub fn add_property(
 ) -> Result<(), StorageError> {
     store.insert(Quad::new(subject, property, object, GraphName::DefaultGraph).as_ref())?;
     Ok(())
-}
-
-pub fn convert_term_to_named_or_blank_node_ref(term: TermRef) -> Option<NamedOrBlankNodeRef> {
-    match term {
-        TermRef::NamedNode(node) => Some(NamedOrBlankNodeRef::NamedNode(node)),
-        TermRef::BlankNode(node) => Some(NamedOrBlankNodeRef::BlankNode(node)),
-        _ => None,
-    }
-}
-
-/// Create new memory metrics store for supplied dataset
-pub fn create_metrics_store(dataset: NamedNodeRef) -> Result<Store, StorageError> {
-    let store = Store::new()?;
-
-    // Insert dataset
-    store.insert(&Quad::new(
-        dataset.clone(),
-        rdf::TYPE,
-        dcat::DATASET_CLASS,
-        GraphName::DefaultGraph,
-    ))?;
-    Ok(store)
 }
 
 pub fn add_five_star_annotation(store: &Store) -> Result<BlankNode, StorageError> {
@@ -163,10 +143,62 @@ pub fn add_derived_from(
     Ok(())
 }
 
+/// Insert dataset assessment into store
+pub fn insert_dataset_assessment(
+    dataset_assessment: NamedNodeRef,
+    dataset: NamedNodeRef,
+    store: &Store,
+) -> Result<(), Error> {
+    store.insert(&Quad::new(
+        dataset_assessment.clone(),
+        rdf::TYPE,
+        dcat_mqa::DATASET_ASSESSMENT_CLASS,
+        GraphName::DefaultGraph,
+    ))?;
+    store.insert(&Quad::new(
+        dataset_assessment.clone(),
+        dcat_mqa::ASSESSMENT_OF,
+        dataset,
+        GraphName::DefaultGraph,
+    ))?;
+
+    Ok(())
+}
+
+/// Insert distribution assessment into store
+pub fn insert_distribution_assessment(
+    dataset_assessment: NamedNodeRef,
+    distribution_assessment: NamedNodeRef,
+    distribution: NamedNodeRef,
+    store: &Store,
+) -> Result<(), Error> {
+    store.insert(&Quad::new(
+        distribution_assessment,
+        rdf::TYPE,
+        dcat_mqa::DISTRIBUTION_ASSESSMENT_CLASS,
+        GraphName::DefaultGraph,
+    ))?;
+    store.insert(&Quad::new(
+        distribution_assessment.clone(),
+        dcat_mqa::ASSESSMENT_OF,
+        distribution,
+        GraphName::DefaultGraph,
+    ))?;
+    store.insert(&Quad::new(
+        dataset_assessment,
+        dcat_mqa::HAS_DISTRIBUTION_ASSESSMENT,
+        distribution_assessment,
+        GraphName::DefaultGraph,
+    ))?;
+
+    Ok(())
+}
+
 /// Add quality measurement to metric store
 pub fn add_quality_measurement(
     metric: NamedNodeRef,
-    computed_on: NamedOrBlankNodeRef,
+    target: NamedNodeRef,
+    computed_on: NamedNodeRef,
     value: bool,
     store: &Store,
 ) -> Result<BlankNode, StorageError> {
@@ -214,8 +246,8 @@ pub fn add_quality_measurement(
     )?;
     store.insert(
         Quad::new(
-            computed_on,
-            dqv::HAS_QUALITY_MEASUREMENT,
+            target,
+            dcat_mqa::CONTAINS_QUALITY_MEASUREMENT,
             measurement.as_ref(),
             GraphName::DefaultGraph,
         )

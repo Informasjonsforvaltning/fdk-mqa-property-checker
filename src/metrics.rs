@@ -1,25 +1,51 @@
-use std::str;
+use std::{
+    env,
+    str
+};
 
 use chrono::Utc;
 
-use log::{error, warn};
+use log::{warn};
 
-use oxigraph::model::vocab::rdf;
-use oxigraph::model::{BlankNode, NamedNodeRef, NamedOrBlankNodeRef, Quad, Term};
-use oxigraph::store::{StorageError, Store};
-
-use crate::schemas::{MQAEvent, MQAEventType};
-
-use crate::reference_data::{valid_file_type, valid_media_type};
-
-use crate::vocab::{dcat, dcat_mqa, dcterms, dqv, oa};
-
-use crate::rdf::{
-    add_derived_from, add_five_star_annotation, add_property, add_quality_measurement,
-    convert_term_to_named_or_blank_node_ref, create_metrics_store, dump_graph_as_turtle,
-    get_dataset_node, get_five_star_annotation, has_property, is_rdf_format, list_distributions,
-    list_formats, list_media_types, parse_turtle,
+use oxigraph::{
+    model::{BlankNode, NamedNodeRef, Quad, Term, NamedNode},
+    store::{StorageError, Store}
 };
+
+use lazy_static::lazy_static;
+use sha2::{
+    digest::{
+        consts::U16,
+        generic_array::{sequence::Split, GenericArray},
+    },
+    Digest, Sha256,
+};
+use uuid::Uuid;
+
+use crate::{
+    schemas::{MQAEvent, MQAEventType},
+    reference_data::{valid_file_type, valid_media_type},
+    vocab::{dcat, dcat_mqa, dcterms, oa},
+    rdf::{
+        add_derived_from, add_five_star_annotation, add_property, add_quality_measurement,
+        dump_graph_as_turtle, insert_dataset_assessment, insert_distribution_assessment,
+        get_dataset_node, get_five_star_annotation, has_property, is_rdf_format, list_distributions,
+        list_formats, list_media_types, parse_turtle,
+    }, error::Error
+};
+
+lazy_static! {
+    pub static ref MQA_URI_BASE: String =
+        env::var("MQA_URI_BASE").unwrap_or("http://localhost:8080".to_string());
+}
+
+fn uuid_from_str(s: String) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(s);
+    let hash = hasher.finalize();
+    let (head, _): (GenericArray<_, U16>, _) = Split::split(hash);
+    uuid::Uuid::from_u128(u128::from_le_bytes(*head.as_ref()))
+}
 
 pub fn parse_rdf_graph_and_calculate_metrics(
     fdk_id: String,
@@ -29,7 +55,7 @@ pub fn parse_rdf_graph_and_calculate_metrics(
         Ok(store) => {
             match get_dataset_node(&store) {
                 Some(dataset_node) => {
-                    match calculate_metrics(dataset_node.as_ref(), &store) {
+                    match calculate_metrics(fdk_id.clone(), dataset_node.as_ref(), &store) {
                         Ok(metrics_store) => {
                             match dump_graph_as_turtle(&metrics_store) {
                                 Ok(bytes) => {
@@ -59,9 +85,15 @@ pub fn parse_rdf_graph_and_calculate_metrics(
     }
 }
 
-fn calculate_metrics(dataset_node: NamedNodeRef, store: &Store) -> Result<Store, StorageError> {
-    // Make MQA metrics model (DQV)
-    let metrics_store = create_metrics_store(dataset_node)?;
+fn calculate_metrics(fdk_id: String, dataset_node: NamedNodeRef, store: &Store) -> Result<Store, Error> {
+    let dataset_assessment = NamedNode::new(format!(
+        "{}/assessments/datasets/{}",
+        MQA_URI_BASE.clone(),
+        fdk_id.clone()
+    ))?;
+
+    let metrics_store = Store::new()?;
+    insert_dataset_assessment(dataset_assessment.as_ref(), dataset_node, &metrics_store)?;
 
     for (metric, props) in vec![
         (
@@ -88,6 +120,7 @@ fn calculate_metrics(dataset_node: NamedNodeRef, store: &Store) -> Result<Store,
     ] {
         add_quality_measurement(
             metric,
+            dataset_assessment.as_ref(),
             dataset_node.into(),
             props
                 .into_iter()
@@ -99,40 +132,41 @@ fn calculate_metrics(dataset_node: NamedNodeRef, store: &Store) -> Result<Store,
     // TODO Verify if valid license uri
     add_quality_measurement(
         dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT,
+        dataset_assessment.as_ref(),
         dataset_node.into(),
         false,
         &metrics_store,
     )?;
 
-    for quad in list_distributions(dataset_node, &store) {
-        match quad {
-            Ok(dist_quad) => {
-                metrics_store.insert(dist_quad.as_ref())?;
-                match convert_term_to_named_or_blank_node_ref(dist_quad.object.as_ref()) {
-                    Some(dist_node) => {
-                        add_property(
-                            dist_node.into(),
-                            rdf::TYPE.into(),
-                            dcat::DISTRIBUTION_CLASS.into(),
-                            &metrics_store,
-                        )?;
-                        calculate_distribution_metrics(dist_node, store, &metrics_store)?;
-                    }
-                    None => error!(
-                        "Distribution is not a named or blank node {}",
-                        dist_quad.object
-                    ),
-                }
-            }
-            Err(e) => error!("Listing distributions failed {}", e),
-        }
+    for dist_quad in list_distributions(dataset_node, store).collect::<Result<Vec<Quad>, _>>()? {
+        let distribution = if let Term::NamedNode(node) = dist_quad.object.clone() {
+            node
+        } else {
+            warn!("Distribution is not a named node {}", fdk_id);
+            continue;
+        };
+
+        let distribution_assessment = NamedNode::new(format!(
+            "{}/assessments/distributions/{}",
+            MQA_URI_BASE.clone(),
+            uuid_from_str(distribution.as_str().to_string())
+        ))?;
+
+        insert_distribution_assessment(
+            dataset_assessment.as_ref(),
+            distribution_assessment.as_ref(),
+            distribution.as_ref(),
+            &metrics_store,
+        )?;
+
+        calculate_distribution_metrics(distribution_assessment.as_ref(), distribution.as_ref(), store, &metrics_store)?;
     }
 
     match get_five_star_annotation(&metrics_store) {
         Some(five_star_annotation) => {
             add_property(
-                dataset_node.into(),
-                dqv::HAS_QUALITY_ANNOTATION,
+                dataset_assessment.as_ref().into(),
+                dcat_mqa::CONTAINS_QUALITY_ANNOTATION,
                 five_star_annotation.as_ref().into(),
                 &metrics_store,
             )?;
@@ -144,7 +178,8 @@ fn calculate_metrics(dataset_node: NamedNodeRef, store: &Store) -> Result<Store,
 }
 
 fn calculate_distribution_metrics(
-    dist_node: NamedOrBlankNodeRef,
+    dist_assessment_node: NamedNodeRef,
+    dist_node: NamedNodeRef,
     store: &Store,
     metrics_store: &Store,
 ) -> Result<(), StorageError> {
@@ -166,6 +201,7 @@ fn calculate_distribution_metrics(
     ] {
         add_quality_measurement(
             metric,
+            dist_assessment_node,
             dist_node.into(),
             props
                 .into_iter()
@@ -218,6 +254,7 @@ fn calculate_distribution_metrics(
 
             five_star_machine_interpretable_derived_from = Some(add_quality_measurement(
                 dcat_mqa::FORMAT_MEDIA_TYPE_MACHINE_INTERPRETABLE,
+                dist_assessment_node,
                 dist_node.into(),
                 is_format_machine_interpretable,
                 &metrics_store,
@@ -225,6 +262,7 @@ fn calculate_distribution_metrics(
 
             five_star_non_proprietary_derived_from = Some(add_quality_measurement(
                 dcat_mqa::FORMAT_MEDIA_TYPE_NON_PROPRIETARY,
+                dist_assessment_node,
                 dist_node.into(),
                 is_format_non_proprietary,
                 &metrics_store,
@@ -247,6 +285,7 @@ fn calculate_distribution_metrics(
 
     add_quality_measurement(
         dcat_mqa::FORMAT_MEDIA_TYPE_VOCABULARY_ALIGNMENT,
+        dist_assessment_node,
         dist_node.into(),
         is_format_aligned || is_media_type_aligned,
         &metrics_store,
@@ -256,6 +295,7 @@ fn calculate_distribution_metrics(
         // TODO
         add_quality_measurement(
             dcat_mqa::KNOWN_LICENSE,
+            dist_assessment_node,
             dist_node.into(),
             false,
             &metrics_store,
@@ -264,6 +304,7 @@ fn calculate_distribution_metrics(
         // TODO
         five_star_open_license_derived_from = Some(add_quality_measurement(
             dcat_mqa::OPEN_LICENSE,
+            dist_assessment_node,
             dist_node.into(),
             false,
             &metrics_store,
@@ -325,6 +366,7 @@ fn calculate_distribution_metrics(
 
     add_quality_measurement(
         dcat_mqa::AT_LEAST_FOUR_STARS,
+        dist_assessment_node,
         dist_node.into(),
         five_star_rating == Some(dcat_mqa::FIVE_STARS)
             || five_star_rating == Some(dcat_mqa::FOUR_STARS),
@@ -352,8 +394,9 @@ fn calculate_distribution_metrics(
 
 #[cfg(test)]
 mod tests {
-    use crate::{rdf, utils::setup_logger};
+    use crate::{utils::setup_logger, vocab::dcat_mqa};
 
+    use oxigraph::model::{Subject, vocab};
     use super::*;
     use std::env;
 
@@ -418,6 +461,13 @@ mod tests {
             @prefix vcard: <http://www.w3.org/2006/vcard/ns#> . 
             @prefix xsd: <http://www.w3.org/2001/XMLSchema#> . 
             
+            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> rdf:type dcat:Distribution ; dct:description "Norsk bistand i tall etter partner"@nb ; 
+                dct:format <https://www.iana.org/assignments/media-types/application/vnd.openxmlformats-officedocument.spreadsheetml.sheet> , 
+                        <https://www.iana.org/assignments/media-types/text/csv> ; 
+                dct:license <http://data.norge.no/nlod/no/2.0> ; 
+                dct:title "Bistandsresultater - bistand etter partner"@nb ; 
+                dcat:accessURL <https://resultater.norad.no/partner/> .
+                
             <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> rdf:type dcat:Dataset ; 
                 dct:accessRights <http://publications.europa.eu/resource/authority/access-right/PUBLIC> ; 
                 dct:description "Visning over all norsk offentlig bistand fra 1960 til siste kalenderår sortert etter partnerorganisasjoner."@nb ; 
@@ -428,13 +478,7 @@ mod tests {
                 dct:title "Bistandsresultater - bistand etter partner"@nb ; 
                 dct:type "Data" ; 
                 dcat:contactPoint [ rdf:type vcard:Organization ; vcard:hasEmail <mailto:resultater@norad.no> ] ; 
-                dcat:distribution [ 
-                    rdf:type dcat:Distribution ; dct:description "Norsk bistand i tall etter partner"@nb ; 
-                    dct:format <https://www.iana.org/assignments/media-types/application/vnd.openxmlformats-officedocument.spreadsheetml.sheet> , 
-                            <https://www.iana.org/assignments/media-types/text/csv> ; 
-                    dct:license <http://data.norge.no/nlod/no/2.0> ; 
-                    dct:title "Bistandsresultater - bistand etter partner"@nb ; 
-                    dcat:accessURL <https://resultater.norad.no/partner/> ] ; 
+                dcat:distribution <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> ; 
                 dcat:keyword "oda"@nb , "norad"@nb , "bistand"@nb ; 
                 dcat:landingPage <https://resultater.norad.no/partner/> ; 
                 dcat:theme <http://publications.europa.eu/resource/authority/data-theme/INTR> ; 
@@ -451,136 +495,139 @@ mod tests {
         "#.to_string());
 
         let store_expected = parse_turtle(String::from(
-            r#"<https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityAnnotation> _:655a2d603373caf2cfea3e26fde4697c .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:4b8b60fabbdc5137fc432ea73999f5d0 .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:5967523cf8203c6de1527a2df417f8e7 .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:69ef28f5acbde9c94f21a288c041715b .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:77c5880861e68ceccd97f43faf62df0d .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:8391f99de1a1465114fe249cb22fe350 .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:8e39b6cb3cb549181bf3c325f50e5dea .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:ca0550f63c24e83c345fb26ff70fc868 .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:d24a3a2898694457ef5cd197ac98a446 .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:d62ad04a6bb514efb0cc1673dd59221c .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:e7a8b5f28be58d559c99ac8f33d98c2c .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#Dataset> .
-            <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dcat#distribution> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:1c1218bfecd7df884f256cbdcff24c8d <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:1c1218bfecd7df884f256cbdcff24c8d <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:1c1218bfecd7df884f256cbdcff24c8d <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#mediaTypeAvailability> .
-            _:1c1218bfecd7df884f256cbdcff24c8d <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:232150fee40e4bcdc92b65b54f948654 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:232150fee40e4bcdc92b65b54f948654 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:232150fee40e4bcdc92b65b54f948654 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#licenseAvailability> .
-            _:232150fee40e4bcdc92b65b54f948654 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:33fb81ef67d1b18100de36153306a5e0 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:33fb81ef67d1b18100de36153306a5e0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:33fb81ef67d1b18100de36153306a5e0 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#dateModifiedAvailability> .
-            _:33fb81ef67d1b18100de36153306a5e0 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:3c0537e63d84ed27c3141bd9c9280914 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:3c0537e63d84ed27c3141bd9c9280914 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:3c0537e63d84ed27c3141bd9c9280914 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#downloadUrlAvailability> .
-            _:3c0537e63d84ed27c3141bd9c9280914 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:4b8b60fabbdc5137fc432ea73999f5d0 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:4b8b60fabbdc5137fc432ea73999f5d0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:4b8b60fabbdc5137fc432ea73999f5d0 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#temporalAvailability> .
-            _:4b8b60fabbdc5137fc432ea73999f5d0 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:51133baa05f7fbd8069c35d942b48cf6 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:51133baa05f7fbd8069c35d942b48cf6 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:51133baa05f7fbd8069c35d942b48cf6 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#formatMediaTypeMachineInterpretable> .
-            _:51133baa05f7fbd8069c35d942b48cf6 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:533bec937eb36ad08bbada485f226ad4 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:533bec937eb36ad08bbada485f226ad4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:533bec937eb36ad08bbada485f226ad4 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#rightsAvailability> .
-            _:533bec937eb36ad08bbada485f226ad4 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:546152776a33fae537ee74cb82b2704f <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:546152776a33fae537ee74cb82b2704f <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:546152776a33fae537ee74cb82b2704f <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#knownLicense> .
-            _:546152776a33fae537ee74cb82b2704f <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:5967523cf8203c6de1527a2df417f8e7 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:5967523cf8203c6de1527a2df417f8e7 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:5967523cf8203c6de1527a2df417f8e7 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#accessRightsAvailability> .
-            _:5967523cf8203c6de1527a2df417f8e7 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:655a2d603373caf2cfea3e26fde4697c <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityAnnotation> .
-            _:655a2d603373caf2cfea3e26fde4697c <http://www.w3.org/ns/oa#hasBody> <https://data.norge.no/vocabulary/dcatno-mqa#zeroStars> .
-            _:655a2d603373caf2cfea3e26fde4697c <http://www.w3.org/ns/oa#motivatedBy> <http://www.w3.org/ns/oa#classifying> .
-            _:655a2d603373caf2cfea3e26fde4697c <http://www.w3.org/ns/prov#wasDerivedFrom> _:bd8af50ca3ed16c275c260955b7ef682 .
-            _:69ef28f5acbde9c94f21a288c041715b <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:69ef28f5acbde9c94f21a288c041715b <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:69ef28f5acbde9c94f21a288c041715b <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#keywordAvailability> .
-            _:69ef28f5acbde9c94f21a288c041715b <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:77c5880861e68ceccd97f43faf62df0d <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:77c5880861e68ceccd97f43faf62df0d <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:77c5880861e68ceccd97f43faf62df0d <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#accessRightsVocabularyAlignment> .
-            _:77c5880861e68ceccd97f43faf62df0d <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:8391f99de1a1465114fe249cb22fe350 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:8391f99de1a1465114fe249cb22fe350 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:8391f99de1a1465114fe249cb22fe350 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#publisherAvailability> .
-            _:8391f99de1a1465114fe249cb22fe350 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:8e39b6cb3cb549181bf3c325f50e5dea <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:8e39b6cb3cb549181bf3c325f50e5dea <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:8e39b6cb3cb549181bf3c325f50e5dea <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#dateModifiedAvailability> .
-            _:8e39b6cb3cb549181bf3c325f50e5dea <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#Distribution> .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:1c1218bfecd7df884f256cbdcff24c8d .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:232150fee40e4bcdc92b65b54f948654 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:33fb81ef67d1b18100de36153306a5e0 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:3c0537e63d84ed27c3141bd9c9280914 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:51133baa05f7fbd8069c35d942b48cf6 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:533bec937eb36ad08bbada485f226ad4 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:546152776a33fae537ee74cb82b2704f .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:a94df11b4e8482bc8cad2e511a013ca7 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:afb21d9ddf0cf29d2495837bb9cd90cf .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:bd8af50ca3ed16c275c260955b7ef682 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:d36717340510b75318124cfd4c0e1250 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:d9e5635c3a14b816acce2748167d06a3 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:eb5c20ff509c1cf84ed7ab1d43ce7bd6 .
-            _:a1ebdafb6670f791640c7b3facf64b55 <http://www.w3.org/ns/dqv#hasQualityMeasurement> _:f75a6ada9a80cb2ad9837979ff083e88 .
-            _:a94df11b4e8482bc8cad2e511a013ca7 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:a94df11b4e8482bc8cad2e511a013ca7 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:a94df11b4e8482bc8cad2e511a013ca7 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#dateIssuedAvailability> .
-            _:a94df11b4e8482bc8cad2e511a013ca7 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:afb21d9ddf0cf29d2495837bb9cd90cf <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:afb21d9ddf0cf29d2495837bb9cd90cf <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:afb21d9ddf0cf29d2495837bb9cd90cf <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#atLeastFourStars> .
-            _:afb21d9ddf0cf29d2495837bb9cd90cf <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:bd8af50ca3ed16c275c260955b7ef682 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:bd8af50ca3ed16c275c260955b7ef682 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:bd8af50ca3ed16c275c260955b7ef682 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#openLicense> .
-            _:bd8af50ca3ed16c275c260955b7ef682 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:ca0550f63c24e83c345fb26ff70fc868 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:ca0550f63c24e83c345fb26ff70fc868 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:ca0550f63c24e83c345fb26ff70fc868 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#spatialAvailability> .
-            _:ca0550f63c24e83c345fb26ff70fc868 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:d24a3a2898694457ef5cd197ac98a446 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:d24a3a2898694457ef5cd197ac98a446 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:d24a3a2898694457ef5cd197ac98a446 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#contactPointAvailability> .
-            _:d24a3a2898694457ef5cd197ac98a446 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:d36717340510b75318124cfd4c0e1250 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:d36717340510b75318124cfd4c0e1250 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:d36717340510b75318124cfd4c0e1250 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#formatAvailability> .
-            _:d36717340510b75318124cfd4c0e1250 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:d62ad04a6bb514efb0cc1673dd59221c <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:d62ad04a6bb514efb0cc1673dd59221c <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:d62ad04a6bb514efb0cc1673dd59221c <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#categoryAvailability> .
-            _:d62ad04a6bb514efb0cc1673dd59221c <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:d9e5635c3a14b816acce2748167d06a3 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:d9e5635c3a14b816acce2748167d06a3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:d9e5635c3a14b816acce2748167d06a3 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#formatMediaTypeNonProprietary> .
-            _:d9e5635c3a14b816acce2748167d06a3 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:e7a8b5f28be58d559c99ac8f33d98c2c <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:e7a8b5f28be58d559c99ac8f33d98c2c <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:e7a8b5f28be58d559c99ac8f33d98c2c <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#dateIssuedAvailability> .
-            _:e7a8b5f28be58d559c99ac8f33d98c2c <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
-            _:eb5c20ff509c1cf84ed7ab1d43ce7bd6 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:eb5c20ff509c1cf84ed7ab1d43ce7bd6 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:eb5c20ff509c1cf84ed7ab1d43ce7bd6 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#formatMediaTypeVocabularyAlignment> .
-            _:eb5c20ff509c1cf84ed7ab1d43ce7bd6 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 .
-            _:f75a6ada9a80cb2ad9837979ff083e88 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-            _:f75a6ada9a80cb2ad9837979ff083e88 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
-            _:f75a6ada9a80cb2ad9837979ff083e88 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#byteSizeAvailability> .
-            _:f75a6ada9a80cb2ad9837979ff083e88 <http://www.w3.org/ns/dqv#computedOn> _:a1ebdafb6670f791640c7b3facf64b55 ."#,
+            r#"<https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityAnnotation> _:a1f6bdfa800f9044fc9e18f5bbfa42e5 .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#assessmentOf> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            <http://localhost:8080/assessments/datasets/1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://data.norge.no/vocabulary/dcatno-mqa#DatasetAssessment> .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#hasDistributionAssessment> <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:680215e3ec0228c896fd801114a2a0e .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:7ae51b6452d773c6c600de5c0abfcb8 .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:81050be482bb0da9ea051295ee5b337 .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:3d18702ae85cee4e17b0919ece050427 .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:4e44066288b45da96c74c3526b8f4780 .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:5b68616d5e3f2aeadd4c934031746e46 .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:a762b8c94ac171a937c09f254a916e3f .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:aed131fc474541da56e65ce38bd19bb4 .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:bd0df7c46a1a49b68b5e0b67bc4975b1 .
+            <http://localhost:8080/assessments/datasets/1> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:d60f7380c1750c4a0fc22a712e395282 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#assessmentOf> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://data.norge.no/vocabulary/dcatno-mqa#DistributionAssessment> .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:59bb90a6bd3974547dd563dad0ff3e2 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:9c62b4d8d36e8c4e70d7ddf05672bb1 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:e8612c0caca4404ff03d09388eb3acf .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:2618f39594a4900893f78e29d841ec77 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:2c7785200ea58d37e0485c381ffc4af5 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:36f67131cd1db53fe6a93b49883f2c40 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:4fbb90d09c2120281a38490b0ceb11ef .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:6df030a4d515856d5f615c94ea3a4e06 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:81ed38c70c900bb0456d35f0c1b94056 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:88f83ad9cfc3a3ea547465f01018f437 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:8c8aa449ce09b41fdf966b4f934a1e47 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:93795091984d9326e96656db59825dc1 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:ab31464750546984b59f7f599247f666 .
+            <http://localhost:8080/assessments/distributions/8118546f-3196-0f36-173d-814cf974071f> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityMeasurement> _:da6e2e0bdb700a746368ded59c8920f0 .
+            _:59bb90a6bd3974547dd563dad0ff3e2 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:59bb90a6bd3974547dd563dad0ff3e2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:59bb90a6bd3974547dd563dad0ff3e2 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#byteSizeAvailability> .
+            _:59bb90a6bd3974547dd563dad0ff3e2 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:680215e3ec0228c896fd801114a2a0e <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:680215e3ec0228c896fd801114a2a0e <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:680215e3ec0228c896fd801114a2a0e <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#keywordAvailability> .
+            _:680215e3ec0228c896fd801114a2a0e <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:7ae51b6452d773c6c600de5c0abfcb8 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:7ae51b6452d773c6c600de5c0abfcb8 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:7ae51b6452d773c6c600de5c0abfcb8 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#accessRightsAvailability> .
+            _:7ae51b6452d773c6c600de5c0abfcb8 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:81050be482bb0da9ea051295ee5b337 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:81050be482bb0da9ea051295ee5b337 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:81050be482bb0da9ea051295ee5b337 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#dateIssuedAvailability> .
+            _:81050be482bb0da9ea051295ee5b337 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:9c62b4d8d36e8c4e70d7ddf05672bb1 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:9c62b4d8d36e8c4e70d7ddf05672bb1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:9c62b4d8d36e8c4e70d7ddf05672bb1 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#downloadUrlAvailability> .
+            _:9c62b4d8d36e8c4e70d7ddf05672bb1 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:e8612c0caca4404ff03d09388eb3acf <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:e8612c0caca4404ff03d09388eb3acf <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:e8612c0caca4404ff03d09388eb3acf <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#rightsAvailability> .
+            _:e8612c0caca4404ff03d09388eb3acf <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:2618f39594a4900893f78e29d841ec77 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:2618f39594a4900893f78e29d841ec77 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:2618f39594a4900893f78e29d841ec77 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#dateModifiedAvailability> .
+            _:2618f39594a4900893f78e29d841ec77 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:2c7785200ea58d37e0485c381ffc4af5 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:2c7785200ea58d37e0485c381ffc4af5 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:2c7785200ea58d37e0485c381ffc4af5 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#formatMediaTypeVocabularyAlignment> .
+            _:2c7785200ea58d37e0485c381ffc4af5 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:36f67131cd1db53fe6a93b49883f2c40 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:36f67131cd1db53fe6a93b49883f2c40 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:36f67131cd1db53fe6a93b49883f2c40 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#formatMediaTypeMachineInterpretable> .
+            _:36f67131cd1db53fe6a93b49883f2c40 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:3d18702ae85cee4e17b0919ece050427 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:3d18702ae85cee4e17b0919ece050427 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:3d18702ae85cee4e17b0919ece050427 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#accessRightsVocabularyAlignment> .
+            _:3d18702ae85cee4e17b0919ece050427 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:4e44066288b45da96c74c3526b8f4780 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:4e44066288b45da96c74c3526b8f4780 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:4e44066288b45da96c74c3526b8f4780 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#categoryAvailability> .
+            _:4e44066288b45da96c74c3526b8f4780 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:4fbb90d09c2120281a38490b0ceb11ef <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:4fbb90d09c2120281a38490b0ceb11ef <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:4fbb90d09c2120281a38490b0ceb11ef <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#licenseAvailability> .
+            _:4fbb90d09c2120281a38490b0ceb11ef <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:5b68616d5e3f2aeadd4c934031746e46 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:5b68616d5e3f2aeadd4c934031746e46 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:5b68616d5e3f2aeadd4c934031746e46 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#dateModifiedAvailability> .
+            _:5b68616d5e3f2aeadd4c934031746e46 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:6df030a4d515856d5f615c94ea3a4e06 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:6df030a4d515856d5f615c94ea3a4e06 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:6df030a4d515856d5f615c94ea3a4e06 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#mediaTypeAvailability> .
+            _:6df030a4d515856d5f615c94ea3a4e06 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:81ed38c70c900bb0456d35f0c1b94056 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:81ed38c70c900bb0456d35f0c1b94056 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:81ed38c70c900bb0456d35f0c1b94056 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#atLeastFourStars> .
+            _:81ed38c70c900bb0456d35f0c1b94056 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:88f83ad9cfc3a3ea547465f01018f437 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:88f83ad9cfc3a3ea547465f01018f437 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:88f83ad9cfc3a3ea547465f01018f437 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#knownLicense> .
+            _:88f83ad9cfc3a3ea547465f01018f437 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:8c8aa449ce09b41fdf966b4f934a1e47 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:8c8aa449ce09b41fdf966b4f934a1e47 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:8c8aa449ce09b41fdf966b4f934a1e47 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#formatAvailability> .
+            _:8c8aa449ce09b41fdf966b4f934a1e47 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:93795091984d9326e96656db59825dc1 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:93795091984d9326e96656db59825dc1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:93795091984d9326e96656db59825dc1 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#dateIssuedAvailability> .
+            _:93795091984d9326e96656db59825dc1 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:a1f6bdfa800f9044fc9e18f5bbfa42e5 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityAnnotation> .
+            _:a1f6bdfa800f9044fc9e18f5bbfa42e5 <http://www.w3.org/ns/oa#hasBody> <https://data.norge.no/vocabulary/dcatno-mqa#zeroStars> .
+            _:a1f6bdfa800f9044fc9e18f5bbfa42e5 <http://www.w3.org/ns/oa#motivatedBy> <http://www.w3.org/ns/oa#classifying> .
+            _:a1f6bdfa800f9044fc9e18f5bbfa42e5 <http://www.w3.org/ns/prov#wasDerivedFrom> _:da6e2e0bdb700a746368ded59c8920f0 .
+            _:a762b8c94ac171a937c09f254a916e3f <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:a762b8c94ac171a937c09f254a916e3f <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:a762b8c94ac171a937c09f254a916e3f <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#temporalAvailability> .
+            _:a762b8c94ac171a937c09f254a916e3f <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:ab31464750546984b59f7f599247f666 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:ab31464750546984b59f7f599247f666 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:ab31464750546984b59f7f599247f666 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#formatMediaTypeNonProprietary> .
+            _:ab31464750546984b59f7f599247f666 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
+            _:aed131fc474541da56e65ce38bd19bb4 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:aed131fc474541da56e65ce38bd19bb4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:aed131fc474541da56e65ce38bd19bb4 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#publisherAvailability> .
+            _:aed131fc474541da56e65ce38bd19bb4 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:bd0df7c46a1a49b68b5e0b67bc4975b1 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:bd0df7c46a1a49b68b5e0b67bc4975b1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:bd0df7c46a1a49b68b5e0b67bc4975b1 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#contactPointAvailability> .
+            _:bd0df7c46a1a49b68b5e0b67bc4975b1 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:d60f7380c1750c4a0fc22a712e395282 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:d60f7380c1750c4a0fc22a712e395282 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:d60f7380c1750c4a0fc22a712e395282 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#spatialAvailability> .
+            _:d60f7380c1750c4a0fc22a712e395282 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
+            _:da6e2e0bdb700a746368ded59c8920f0 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:da6e2e0bdb700a746368ded59c8920f0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
+            _:da6e2e0bdb700a746368ded59c8920f0 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#openLicense> .
+            _:da6e2e0bdb700a746368ded59c8920f0 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> ."#,
         )).unwrap();
 
+        
         assert!(mqa_event.is_ok());
 
         let mqa_event_raw = mqa_event.unwrap();
@@ -594,49 +641,68 @@ mod tests {
                 .count()
         );
 
-        match rdf::get_dataset_node(&store_actual) {
-            Some(dataset_node) => {
-                assert_eq!(
-                    1,
-                    store_actual
-                        .quads_for_pattern(
-                            Some(dataset_node.as_ref().into()),
-                            Some(dqv::HAS_QUALITY_ANNOTATION),
-                            None,
-                            None
-                        )
-                        .count()
-                );
+        let dataset_assessment = store_actual.quads_for_pattern(
+            None,
+            Some(vocab::rdf::TYPE),
+            Some(dcat_mqa::DATASET_ASSESSMENT_CLASS.into()),
+            None,
+        ).next().and_then(|d| match d {
+            Ok(Quad {
+                subject: Subject::NamedNode(s),
+                ..
+            }) => Some(s),
+            _ => None,
+        }).unwrap();
 
-                assert_eq!(
-                    10,
-                    store_actual
-                        .quads_for_pattern(
-                            Some(dataset_node.as_ref().into()),
-                            Some(dqv::HAS_QUALITY_MEASUREMENT),
-                            None,
-                            None
-                        )
-                        .count()
-                );
+        assert_eq!(
+            1,
+            store_actual
+                .quads_for_pattern(
+                    Some(dataset_assessment.as_ref().into()),
+                    Some(dcat_mqa::CONTAINS_QUALITY_ANNOTATION),
+                    None,
+                    None
+                )
+                .count()
+        );
 
-                let dist = list_distributions(dataset_node.as_ref(), &store_actual)
-                    .next()
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(
-                    10,
-                    store_actual
-                        .quads_for_pattern(
-                            Some(dist.subject.as_ref().into()),
-                            Some(dqv::HAS_QUALITY_MEASUREMENT),
-                            None,
-                            None
-                        )
-                        .count()
-                );
-            }
-            _ => assert!(false, "No dataset found"),
-        }
+        assert_eq!(
+            10,
+            store_actual
+                .quads_for_pattern(
+                    Some(dataset_assessment.as_ref().into()),
+                    Some(dcat_mqa::CONTAINS_QUALITY_MEASUREMENT),
+                    None,
+                    None
+                )
+                .count()
+        );
+
+        let dist_assessment_quad = store_actual
+        .quads_for_pattern(
+            Some(dataset_assessment.as_ref().into()),
+            Some(dcat_mqa::HAS_DISTRIBUTION_ASSESSMENT),
+            None,
+            None
+        )
+            .next()
+            .unwrap()
+            .unwrap();
+
+        if let Term::NamedNode(node) = dist_assessment_quad.object.clone() {   
+            assert_eq!(
+                14,
+                store_actual
+                    .quads_for_pattern(
+                        Some(node.as_ref().into()),
+                        Some(dcat_mqa::CONTAINS_QUALITY_MEASUREMENT),
+                        None,
+                        None
+                    )
+                    .count()
+            );
+        } else {
+            panic!("Distribution assessment is not a named node")
+        };
     }
 }

@@ -6,10 +6,11 @@ use futures::StreamExt;
 use log::info;
 use schema_registry_converter::async_impl::schema_registry::SrSettings;
 
-use crate::kafka::{BROKERS, INPUT_TOPIC, OUTPUT_TOPIC, SCHEMA_REGISTRY};
-use crate::utils::setup_logger;
-
-use crate::schemas::setup_schemas;
+use crate::{
+    kafka::{BROKERS, INPUT_TOPIC, OUTPUT_TOPIC, SCHEMA_REGISTRY},
+    schemas::setup_schemas,
+    utils::setup_logger,
+};
 
 mod error;
 mod kafka;
