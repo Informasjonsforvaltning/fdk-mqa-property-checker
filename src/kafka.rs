@@ -3,7 +3,6 @@ use avro_rs::from_value;
 use cached::lazy_static;
 use chrono::{TimeZone, Utc};
 
-use futures::lock::Mutex;
 use log::{error, info};
 
 use futures::TryStreamExt;
@@ -38,25 +37,6 @@ lazy_static! {
         env::var("INPUT_TOPIC").unwrap_or("dataset-events".to_string());
     pub static ref OUTPUT_TOPIC: String =
         env::var("OUTPUT_TOPIC").unwrap_or("mqa-events".to_string());
-    pub static ref SR_SETTINGS: SrSettings = {
-        let mut schema_registry_urls = SCHEMA_REGISTRY.split(",");
-        let mut sr_settings_builder =
-            SrSettings::new_builder(schema_registry_urls.next().unwrap().to_string());
-        schema_registry_urls.for_each(|url| {
-            sr_settings_builder.add_url(url.to_string());
-        });
-
-        let sr_settings = sr_settings_builder
-            .set_timeout(Duration::from_secs(30))
-            .build()
-            .unwrap();
-
-        sr_settings
-    };
-    static ref AVRO_ENCODER: Mutex<AvroEncoder<'static>> =
-        Mutex::new(AvroEncoder::new(SR_SETTINGS.clone()));
-    static ref AVRO_DECODER: Mutex<AvroDecoder<'static>> =
-        Mutex::new(AvroDecoder::new(SR_SETTINGS.clone()));    
 }
 
 pub fn create_consumer() -> Result<StreamConsumer, KafkaError> {
@@ -90,12 +70,14 @@ pub fn create_producer() -> Result<FutureProducer, KafkaError> {
 ///   4) produce the result to the output topic.
 /// `tokio::spawn` is used to handle IO-bound tasks in parallel (e.g., producing
 /// the messages)
-pub async fn run_async_processor() -> Result<(), Error> {
+pub async fn run_async_processor(sr_settings: SrSettings) -> Result<(), Error> {
     let consumer = create_consumer()?;
     let producer = create_producer()?;
 
     // Create the outer pipeline on the message stream.
     let stream_processor = consumer.stream().try_for_each(|borrowed_message| {
+        let decoder = AvroDecoder::new(sr_settings.clone());
+        let mut encoder = AvroEncoder::new(sr_settings.clone());
         let producer = producer.clone();
         async move {
             // Process each message
@@ -104,7 +86,7 @@ pub async fn run_async_processor() -> Result<(), Error> {
             // be owned in order to be sent to a separate thread.
             let owned_message = borrowed_message.detach();
             tokio::spawn(async move {
-                let mqa_event = handle_dataset_event(owned_message).await;
+                let mqa_event = handle_dataset_event(owned_message, decoder).await;
 
                 match mqa_event {
                     Ok(Some(evt)) => {
@@ -113,7 +95,7 @@ pub async fn run_async_processor() -> Result<(), Error> {
                             String::from("no.fdk.mqa.MQAEvent"),
                         );
 
-                        match AVRO_ENCODER.lock().await.encode_struct(evt, &schema_strategy).await {
+                        match encoder.encode_struct(evt, &schema_strategy).await {
                             Ok(encoded_payload) => {
                                 let record: FutureRecord<String, Vec<u8>> =
                                     FutureRecord::to(&OUTPUT_TOPIC).payload(&encoded_payload);
@@ -154,8 +136,9 @@ async fn record_borrowed_message_receipt(msg: &BorrowedMessage<'_>) {
 
 async fn parse_dataset_event(
     msg: OwnedMessage,
+    mut decoder: AvroDecoder<'_>,
 ) -> Result<DatasetEvent, String> {
-    match AVRO_DECODER.lock().await.decode(msg.payload()).await {
+    match decoder.decode(msg.payload()).await {
         Ok(result) => match result.name {
             Some(name) => match name.name.as_str() {
                 "DatasetEvent" => match name.namespace {
@@ -179,10 +162,11 @@ async fn parse_dataset_event(
 /// Read DatasetEvent message of type DATASET_HARVESTED
 async fn handle_dataset_event(
     msg: OwnedMessage,
+    decoder: AvroDecoder<'_>,
 ) -> Result<Option<MQAEvent>, String> {
     info!("Handle DatasetEvent on message {}", msg.offset());
 
-    let dataset_event = parse_dataset_event(msg).await;
+    let dataset_event = parse_dataset_event(msg, decoder).await;
 
     match dataset_event {
         Ok(event) => match event.event_type {
