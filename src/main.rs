@@ -37,7 +37,7 @@ async fn main() {
     });
 
     let sr_settings = sr_settings_builder
-        .set_timeout(Duration::from_secs(5))
+        .set_timeout(Duration::from_secs(30))
         .build()
         .unwrap();
 
