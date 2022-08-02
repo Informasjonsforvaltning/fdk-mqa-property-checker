@@ -1,9 +1,7 @@
 use std::time::Duration;
 
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
-
-use log::info;
+use futures::{stream::FuturesUnordered, StreamExt};
+use log::{error, info};
 use schema_registry_converter::async_impl::schema_registry::SrSettings;
 
 use crate::{
@@ -43,11 +41,25 @@ async fn main() {
         .build()
         .unwrap();
 
-    setup_schemas(&sr_settings).await;
+    let id = setup_schemas(&sr_settings).await.unwrap_or_else(|_| {
+        error!("unable to register schemas");
+        std::process::exit(1);
+    });
+    info!("Schema succesfully registered with id={}", id);
 
     (0..4)
-        .map(|_| tokio::spawn(kafka::run_async_processor(sr_settings.to_owned())))
+        .map(|i| tokio::spawn(kafka::run_async_processor(i, sr_settings.clone())))
         .collect::<FuturesUnordered<_>>()
-        .for_each(|_| async { () })
+        .for_each(|result| async {
+            result
+                .unwrap_or_else(|_| {
+                    error!("unable to run worker thread");
+                    std::process::exit(1);
+                })
+                .unwrap_or_else(|_| {
+                    error!("worker failed");
+                    std::process::exit(1);
+                });
+        })
         .await
 }
