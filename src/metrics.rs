@@ -1,8 +1,5 @@
-use std::{env, str};
-
-use chrono::Utc;
-
 use log::warn;
+use std::{env, str};
 
 use oxigraph::{
     model::{BlankNode, NamedNode, NamedNodeRef, Quad, Term},
@@ -28,7 +25,6 @@ use crate::{
         list_distributions, list_formats, list_media_types, parse_turtle,
     },
     reference_data::{valid_file_type, valid_media_type},
-    schemas::{MQAEvent, MQAEventType},
     vocab::{dcat, dcat_mqa, dcterms, oa},
 };
 
@@ -46,9 +42,9 @@ fn uuid_from_str(s: String) -> Uuid {
 }
 
 pub fn parse_rdf_graph_and_calculate_metrics(
-    fdk_id: String,
+    fdk_id: &String,
     graph: String,
-) -> Result<MQAEvent, String> {
+) -> Result<String, String> {
     match parse_turtle(graph) {
         Ok(store) => {
             match get_dataset_node(&store) {
@@ -59,12 +55,7 @@ pub fn parse_rdf_graph_and_calculate_metrics(
                                 Ok(bytes) => {
                                     // Create MQA event
                                     match str::from_utf8(bytes.as_slice()) {
-                                        Ok(turtle) => Ok(MQAEvent {
-                                            event_type: MQAEventType::PropertiesChecked,
-                                            fdk_id,
-                                            graph: turtle.to_string(),
-                                            timestamp: Utc::now().timestamp_millis(),
-                                        }),
+                                        Ok(turtle) => Ok(turtle.to_string()),
                                         Err(e) => {
                                             Err(format!("Failed dumping graph as turtle: {}", e))
                                         }
@@ -449,7 +440,7 @@ mod tests {
             format!("http://{}", server.address()),
         );
 
-        let mqa_event = parse_rdf_graph_and_calculate_metrics("1".to_string(), r#"
+        let mqa_graph = parse_rdf_graph_and_calculate_metrics(&"1".to_string(), r#"
             @prefix adms: <http://www.w3.org/ns/adms#> . 
             @prefix cpsv: <http://purl.org/vocab/cpsv#> . 
             @prefix cpsvno: <https://data.norge.no/vocabulary/cpsvno#> . 
@@ -634,10 +625,10 @@ mod tests {
             _:da6e2e0bdb700a746368ded59c8920f0 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> ."#,
         )).unwrap();
 
-        assert!(mqa_event.is_ok());
+        assert!(mqa_graph.is_ok());
 
-        let mqa_event_raw = mqa_event.unwrap();
-        let store_actual = parse_turtle(mqa_event_raw.graph).unwrap();
+        let mqa_graph_raw = mqa_graph.unwrap();
+        let store_actual = parse_turtle(mqa_graph_raw).unwrap();
         assert_eq!(
             store_expected
                 .quads_for_pattern(None, None, None, None)

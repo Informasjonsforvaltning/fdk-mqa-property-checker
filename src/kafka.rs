@@ -25,7 +25,7 @@ use std::time::Duration;
 use std::{env, format};
 
 use crate::error::Error;
-use crate::schemas::{DatasetEvent, DatasetEventType, MQAEvent};
+use crate::schemas::{DatasetEvent, DatasetEventType, MQAEvent, MQAEventType};
 
 use crate::metrics::parse_rdf_graph_and_calculate_metrics;
 
@@ -176,8 +176,14 @@ async fn handle_dataset_event(
                     "{} - Processing dataset harvested event with timestamp {:?}",
                     event.fdk_id, dt
                 );
-                parse_rdf_graph_and_calculate_metrics(event.fdk_id, event.graph)
-                    .map(|evt| Some(evt))
+                parse_rdf_graph_and_calculate_metrics(&event.fdk_id, event.graph).map(|graph| {
+                    Some(MQAEvent {
+                        event_type: MQAEventType::PropertiesChecked,
+                        fdk_id: event.fdk_id,
+                        graph,
+                        timestamp: event.timestamp,
+                    })
+                })
             }
             _ => Ok(None),
         },
