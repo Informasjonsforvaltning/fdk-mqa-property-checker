@@ -44,7 +44,7 @@ fn uuid_from_str(s: String) -> Uuid {
 pub fn parse_rdf_graph_and_calculate_metrics(
     fdk_id: &String,
     graph: String,
-) -> Result<String, String> {
+) -> Result<String, Error> {
     match parse_turtle(graph) {
         Ok(store) => {
             match get_dataset_node(&store) {
@@ -57,20 +57,23 @@ pub fn parse_rdf_graph_and_calculate_metrics(
                                     match str::from_utf8(bytes.as_slice()) {
                                         Ok(turtle) => Ok(turtle.to_string()),
                                         Err(e) => {
-                                            Err(format!("Failed dumping graph as turtle: {}", e))
+                                            Err(format!("Failed dumping graph as turtle: {}", e)
+                                                .into())
                                         }
                                     }
                                 }
-                                Err(e) => Err(format!("Failed dumping graph as turtle: {}", e)),
+                                Err(e) => {
+                                    Err(format!("Failed dumping graph as turtle: {}", e).into())
+                                }
                             }
                         }
-                        Err(e) => Err(format!("{}", e)),
+                        Err(e) => Err(format!("{}", e).into()),
                     }
                 }
-                None => Err(format!("{} - Dataset node not found in graph", fdk_id)),
+                None => Err(format!("{} - Dataset node not found in graph", fdk_id).into()),
             }
         }
-        Err(e) => Err(format!("{}", e)),
+        Err(e) => Err(e),
     }
 }
 
