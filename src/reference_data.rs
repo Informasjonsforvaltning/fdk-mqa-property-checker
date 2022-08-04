@@ -1,16 +1,9 @@
+use cached::proc_macro::cached;
+use http::{HeaderMap, HeaderValue};
+use lazy_static::lazy_static;
+use serde_derive::Deserialize;
 use std::collections::HashMap;
 use std::env;
-
-use http::{HeaderMap, HeaderValue};
-use log::warn;
-
-use cached::proc_macro::cached;
-
-use serde_derive::Deserialize;
-
-use lazy_static::lazy_static;
-
-use crate::utils::strip_http_scheme;
 
 lazy_static! {
     pub static ref REFERENCE_DATA_BASE_URL: String = env::var("REFERENCE_DATA_BASE_URL")
@@ -46,6 +39,10 @@ pub struct FileType {
     pub code: String,
     #[serde(rename = "mediaType")]
     pub media_type: String,
+}
+
+pub fn strip_http_scheme(uri: String) -> String {
+    uri.replace("http://", "").replace("https://", "")
 }
 
 pub fn valid_media_type(media_type: String) -> bool {
@@ -87,12 +84,12 @@ pub fn get_remote_media_types() -> Option<HashMap<String, MediaType>> {
                     .collect::<HashMap<String, MediaType>>(),
             ),
             Err(e) => {
-                warn!("Cannot get remote media-types {}", e);
+                tracing::warn!("Cannot get remote media-types {}", e);
                 None
             }
         },
         Err(e) => {
-            warn!("Cannot get remote media-types {}", e);
+            tracing::warn!("Cannot get remote media-types {}", e);
             None
         }
     }
@@ -114,12 +111,12 @@ pub fn get_remote_file_types() -> Option<HashMap<String, FileType>> {
                     .collect::<HashMap<String, FileType>>(),
             ),
             Err(e) => {
-                warn!("Cannot get remote file-types {}", e);
+                tracing::warn!("Cannot get remote file-types {}", e);
                 None
             }
         },
         Err(e) => {
-            warn!("Cannot get remote file-types {}", e);
+            tracing::warn!("Cannot get remote file-types {}", e);
             None
         }
     }
