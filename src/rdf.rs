@@ -74,6 +74,33 @@ pub fn get_dataset_node(store: &Store) -> Option<NamedNode> {
     })
 }
 
+/// Extract assessment of node.
+pub fn node_assessment(store: &Store, node: NamedNodeRef) -> Result<NamedNode, Error> {
+    store
+        .quads_for_pattern(
+            Some(node.into()),
+            Some(dcat_mqa::HAS_ASSESSMENT.into()),
+            None,
+            None,
+        )
+        .next()
+        .ok_or(Error::from(format!(
+            "assessment not found for node '{}'",
+            node,
+        )))?
+        .map(|d| match d {
+            Quad {
+                object: Term::NamedNode(n),
+                ..
+            } => Ok(n),
+            _ => Err(format!(
+                "assessment of node '{}' is not a named node: '{}'",
+                node, d.object
+            )
+            .into()),
+        })?
+}
+
 pub fn has_property(subject: SubjectRef, property: NamedNodeRef, store: &Store) -> bool {
     store
         .quads_for_pattern(Some(subject), Some(property), None, None)
