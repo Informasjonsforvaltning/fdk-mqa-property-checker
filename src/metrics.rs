@@ -395,7 +395,7 @@ fn calculate_distribution_metrics(
 
 #[cfg(test)]
 mod tests {
-    use crate::{utils::setup_logger, vocab::dcat_mqa};
+    use crate::vocab::dcat_mqa;
 
     use super::*;
     use oxigraph::model::{vocab, Subject};
@@ -403,8 +403,6 @@ mod tests {
 
     #[test]
     fn test_parse_graph_anc_collect_metrics() {
-        setup_logger(true, None);
-
         let server = httpmock::MockServer::start();
 
         server.mock(|when, then| {
