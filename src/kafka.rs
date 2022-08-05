@@ -145,6 +145,7 @@ async fn handle_message(
                 event_type = format!("{:?}", event.event_type),
             );
 
+            let key = event.fdk_id.clone();
             let mqa_event = tokio::task::spawn_blocking(move || {
                 let _enter = span.enter();
                 handle_dataset_event(event)
@@ -154,12 +155,12 @@ async fn handle_message(
             let encoded = encoder
                 .encode_struct(
                     mqa_event,
-                    &SubjectNameStrategy::RecordNameStrategy(String::from("no.fdk.mqa.MQAEvent")),
+                    &SubjectNameStrategy::RecordNameStrategy("no.fdk.mqa.MQAEvent".to_string()),
                 )
                 .await?;
 
             let record: FutureRecord<String, Vec<u8>> =
-                FutureRecord::to(&OUTPUT_TOPIC).payload(&encoded);
+                FutureRecord::to(&OUTPUT_TOPIC).key(&key).payload(&encoded);
             producer
                 .send(record, Duration::from_secs(0))
                 .await
