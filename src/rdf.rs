@@ -1,5 +1,3 @@
-use log::info;
-
 use oxigraph::io::GraphFormat;
 use oxigraph::model::vocab::{rdf, xsd};
 use oxigraph::model::*;
@@ -8,19 +6,15 @@ use oxigraph::store::{QuadIter, SerializerError, StorageError, Store};
 use crate::error::Error;
 use crate::vocab::{dcat, dcat_mqa, dcterms, dqv, prov};
 
-/// Parse Turtle RDF and load into store
-pub fn parse_turtle(turtle: String) -> Result<Store, Error> {
-    info!("Loading turtle graph");
-
-    let store = Store::new()?;
+/// Parse Turtle RDF and load into store.
+pub fn parse_turtle(store: &Store, turtle: String) -> Result<(), Error> {
     store.load_graph(
         turtle.as_ref(),
         GraphFormat::Turtle,
         GraphNameRef::DefaultGraph,
         None,
     )?;
-
-    Ok(store)
+    Ok(())
 }
 
 /// Retrieve datasets
