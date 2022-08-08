@@ -1,5 +1,3 @@
-use std::str;
-
 use oxigraph::{
     model::{BlankNode, NamedNodeRef, Quad, Term},
     store::{StorageError, Store},
@@ -18,50 +16,29 @@ use crate::{
 };
 
 pub fn parse_rdf_graph_and_calculate_metrics(
-    fdk_id: &String,
+    input_store: &Store,
+    output_store: &Store,
     graph: String,
 ) -> Result<String, Error> {
-    match parse_turtle(graph) {
-        Ok(store) => {
-            match get_dataset_node(&store) {
-                Some(dataset_node) => {
-                    match calculate_metrics(fdk_id.clone(), dataset_node.as_ref(), &store) {
-                        Ok(metrics_store) => {
-                            match dump_graph_as_turtle(&metrics_store) {
-                                Ok(bytes) => {
-                                    // Create MQA event
-                                    match str::from_utf8(bytes.as_slice()) {
-                                        Ok(turtle) => Ok(turtle.to_string()),
-                                        Err(e) => {
-                                            Err(format!("Failed dumping graph as turtle: {}", e)
-                                                .into())
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    Err(format!("Failed dumping graph as turtle: {}", e).into())
-                                }
-                            }
-                        }
-                        Err(e) => Err(format!("{}", e).into()),
-                    }
-                }
-                None => Err(format!("{} - Dataset node not found in graph", fdk_id).into()),
-            }
-        }
-        Err(e) => Err(e),
-    }
+    input_store.clear()?;
+    output_store.clear()?;
+    parse_turtle(input_store, graph)?;
+    let dataset_node = get_dataset_node(input_store).ok_or("Dataset node not found in graph")?;
+    calculate_metrics(dataset_node.as_ref(), input_store, output_store)?;
+    let bytes = dump_graph_as_turtle(output_store)?;
+    let turtle = std::str::from_utf8(bytes.as_slice())
+        .map_err(|e| format!("Failed converting graph to string: {}", e))?;
+    Ok(turtle.to_string())
 }
 
 fn calculate_metrics(
-    fdk_id: String,
     dataset_node: NamedNodeRef,
-    store: &Store,
-) -> Result<Store, Error> {
-    let dataset_assessment = node_assessment(&store, dataset_node)?;
+    input_store: &Store,
+    output_store: &Store,
+) -> Result<(), Error> {
+    let dataset_assessment = node_assessment(input_store, dataset_node)?;
 
-    let metrics_store = Store::new()?;
-    insert_dataset_assessment(dataset_assessment.as_ref(), dataset_node, &metrics_store)?;
+    insert_dataset_assessment(dataset_assessment.as_ref(), dataset_node, &output_store)?;
 
     for (metric, props) in vec![
         (
@@ -92,8 +69,8 @@ fn calculate_metrics(
             dataset_node.into(),
             props
                 .into_iter()
-                .any(|p| has_property(dataset_node.into(), p, &store)),
-            &metrics_store,
+                .any(|p| has_property(dataset_node.into(), p, input_store)),
+            &output_store,
         )?;
     }
 
@@ -103,46 +80,48 @@ fn calculate_metrics(
         dataset_assessment.as_ref(),
         dataset_node.into(),
         false,
-        &metrics_store,
+        &output_store,
     )?;
 
-    for dist_quad in list_distributions(dataset_node, store).collect::<Result<Vec<Quad>, _>>()? {
+    for dist_quad in
+        list_distributions(dataset_node, input_store).collect::<Result<Vec<Quad>, _>>()?
+    {
         let distribution = if let Term::NamedNode(node) = dist_quad.object.clone() {
             node
         } else {
-            tracing::warn!("distribution is not a named node {}", fdk_id);
+            tracing::warn!("distribution is not a named node");
             continue;
         };
 
-        let distribution_assessment = node_assessment(&store, distribution.as_ref())?;
+        let distribution_assessment = node_assessment(input_store, distribution.as_ref())?;
         insert_distribution_assessment(
             dataset_assessment.as_ref(),
             distribution_assessment.as_ref(),
             distribution.as_ref(),
-            &metrics_store,
+            &output_store,
         )?;
 
         calculate_distribution_metrics(
             distribution_assessment.as_ref(),
             distribution.as_ref(),
-            store,
-            &metrics_store,
+            input_store,
+            output_store,
         )?;
     }
 
-    match get_five_star_annotation(&metrics_store) {
+    match get_five_star_annotation(output_store) {
         Some(five_star_annotation) => {
             add_property(
                 dataset_assessment.as_ref().into(),
                 dcat_mqa::CONTAINS_QUALITY_ANNOTATION,
                 five_star_annotation.as_ref().into(),
-                &metrics_store,
+                output_store,
             )?;
         }
         None => tracing::warn!("Could not find five-star-annotation"),
     }
 
-    Ok(metrics_store)
+    Ok(())
 }
 
 fn calculate_distribution_metrics(
@@ -408,7 +387,7 @@ mod tests {
             format!("http://{}", server.address()),
         );
 
-        let mqa_graph = parse_rdf_graph_and_calculate_metrics(&"1".to_string(), r#"
+        let mqa_graph = parse_rdf_graph_and_calculate_metrics(&mut Store::new().unwrap(), &mut Store::new().unwrap(), r#"
             @prefix adms: <http://www.w3.org/ns/adms#> . 
             @prefix cpsv: <http://purl.org/vocab/cpsv#> . 
             @prefix cpsvno: <https://data.norge.no/vocabulary/cpsvno#> . 
@@ -461,9 +440,10 @@ mod tests {
                     skos:prefLabel "Engelsk"@nb . 
                 <http://publications.europa.eu/resource/authority/language/NOR> rdf:type dct:LinguisticSystem ; 
                     <http://publications.europa.eu/ontology/authority/authority-code> "NOR" ; skos:prefLabel "Norsk"@nb .
-        "#.to_string());
+        "#.to_string()).unwrap();
 
-        let store_expected = parse_turtle(String::from(
+        let store_expected = Store::new().unwrap();
+        parse_turtle(&store_expected, String::from(
             r#"<https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityAnnotation> _:a1f6bdfa800f9044fc9e18f5bbfa42e5 .
             <http://dataset.assessment.no> <https://data.norge.no/vocabulary/dcatno-mqa#assessmentOf> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
             <http://dataset.assessment.no> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://data.norge.no/vocabulary/dcatno-mqa#DatasetAssessment> .
@@ -596,8 +576,8 @@ mod tests {
             _:da6e2e0bdb700a746368ded59c8920f0 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> ."#,
         )).unwrap();
 
-        let mqa_graph_raw = mqa_graph.unwrap();
-        let store_actual = parse_turtle(mqa_graph_raw).unwrap();
+        let store_actual = Store::new().unwrap();
+        parse_turtle(&store_actual, mqa_graph).unwrap();
         assert_eq!(
             store_expected
                 .quads_for_pattern(None, None, None, None)
