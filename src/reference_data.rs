@@ -7,7 +7,7 @@ use std::env;
 
 lazy_static! {
     pub static ref REFERENCE_DATA_BASE_URL: String = env::var("REFERENCE_DATA_BASE_URL")
-        .unwrap_or("https://data.norge.no/new-reference-data".to_string());
+        .unwrap_or("https://data.norge.no".to_string());
     pub static ref REFERENCE_DATA_API_KEY: String =
         env::var("REFERENCE_DATA_API_KEY").unwrap_or("".to_string());
 }
@@ -71,7 +71,7 @@ fn construct_headers() -> HeaderMap {
 #[cached(time = 86400)]
 pub fn get_remote_media_types() -> Option<HashMap<String, MediaType>> {
     let response = reqwest::blocking::Client::new()
-        .get(format!("{}/iana/media-types", REFERENCE_DATA_BASE_URL.to_string()).as_str())
+        .get(format!("{}/reference-data/iana/media-types", REFERENCE_DATA_BASE_URL.to_string()).as_str())
         .headers(construct_headers())
         .send();
 
@@ -98,7 +98,7 @@ pub fn get_remote_media_types() -> Option<HashMap<String, MediaType>> {
 #[cached(time = 86400)]
 pub fn get_remote_file_types() -> Option<HashMap<String, FileType>> {
     let response = reqwest::blocking::Client::new()
-        .get(format!("{}/eu/file-types", REFERENCE_DATA_BASE_URL.to_string()).as_str())
+        .get(format!("{}/reference-data/eu/file-types", REFERENCE_DATA_BASE_URL.to_string()).as_str())
         .headers(construct_headers())
         .send();
 
