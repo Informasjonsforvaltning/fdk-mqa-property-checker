@@ -352,7 +352,7 @@ mod tests {
         let server = httpmock::MockServer::start();
 
         server.mock(|when, then| {
-            when.path("/iana/media-types");
+            when.path("/reference-data/iana/media-types");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
@@ -368,7 +368,7 @@ mod tests {
         });
 
         server.mock(|when, then| {
-            when.path("/eu/file-types");
+            when.path("/reference-data/eu/file-types");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
