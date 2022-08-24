@@ -444,7 +444,7 @@ mod tests {
 
         let store_expected = Store::new().unwrap();
         parse_turtle(&store_expected, String::from(
-            r#"<https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> <http://www.w3.org/ns/dqv#hasQualityAnnotation> _:a1f6bdfa800f9044fc9e18f5bbfa42e5 .
+            r#"<http://dataset.assessment.no> <https://data.norge.no/vocabulary/dcatno-mqa#containsQualityAnnotation> _:a1f6bdfa800f9044fc9e18f5bbfa42e5 .
             <http://dataset.assessment.no> <https://data.norge.no/vocabulary/dcatno-mqa#assessmentOf> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .
             <http://dataset.assessment.no> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://data.norge.no/vocabulary/dcatno-mqa#DatasetAssessment> .
             <http://dataset.assessment.no> <https://data.norge.no/vocabulary/dcatno-mqa#hasDistributionAssessment> <http://dist.foo.assessment.no> .
