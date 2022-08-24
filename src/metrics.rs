@@ -348,7 +348,7 @@ fn calculate_distribution_metrics(
 
 #[cfg(test)]
 mod tests {
-    use crate::vocab::dcat_mqa;
+    use crate::vocab::{dcat_mqa, dqv};
 
     use super::*;
     use oxigraph::model::{vocab, Literal, Subject};
@@ -675,13 +675,25 @@ mod tests {
             );
 
             let known_license_assessment = store_actual
-                .quads_for_pattern(None, Some(dcat_mqa::KNOWN_LICENSE), None, None)
+                .quads_for_pattern(None, None, Some(dcat_mqa::KNOWN_LICENSE.into()), None)
+                .next()
+                .unwrap()
+                .unwrap()
+                .subject;
+
+            let known_license_value = store_actual
+                .quads_for_pattern(
+                    Some(known_license_assessment.as_ref()),
+                    Some(dqv::VALUE),
+                    None,
+                    None,
+                )
                 .next()
                 .unwrap()
                 .unwrap();
 
             assert_eq!(
-                known_license_assessment.object,
+                known_license_value.object,
                 Term::Literal(Literal::new_typed_literal(
                     "true",
                     NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
