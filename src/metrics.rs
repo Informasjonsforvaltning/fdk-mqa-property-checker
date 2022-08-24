@@ -351,7 +351,7 @@ mod tests {
     use crate::vocab::dcat_mqa;
 
     use super::*;
-    use oxigraph::model::{vocab, Subject};
+    use oxigraph::model::{vocab, Literal, Subject};
     use std::env;
 
     #[test]
@@ -675,18 +675,18 @@ mod tests {
             );
 
             let known_license_assessment = store_actual
-                .quads_for_pattern(
-                    Some(node.as_ref().into()),
-                    Some(dcat_mqa::KNOWN_LICENSE),
-                    None,
-                    None,
-                )
+                .quads_for_pattern(None, Some(dcat_mqa::KNOWN_LICENSE), None, None)
                 .next()
-                .and_then(|d| match d {
-                    Ok(Quad { predicate: nn, .. }) => Some(nn),
-                    _ => None,
-                })
+                .unwrap()
                 .unwrap();
+
+            assert_eq!(
+                known_license_assessment.object,
+                Term::Literal(Literal::new_typed_literal(
+                    "true",
+                    NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
+                ))
+            );
         } else {
             panic!("Distribution assessment is not a named node")
         };
