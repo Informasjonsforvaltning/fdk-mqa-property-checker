@@ -29,7 +29,7 @@ use tracing::{Instrument, Level};
 use crate::{
     error::Error,
     metrics::parse_rdf_graph_and_calculate_metrics,
-    schemas::{DatasetEvent, DatasetEventType, InputEvent, MQAEvent, MQAEventType},
+    schemas::{DatasetEvent, DatasetEventType, InputEvent, MQAEventType, MqaEvent},
 };
 
 lazy_static! {
@@ -160,7 +160,7 @@ async fn receive_message(
     };
 }
 
-async fn handle_message(
+pub async fn handle_message(
     producer: &FutureProducer,
     decoder: &mut AvroDecoder<'_>,
     encoder: &mut AvroEncoder<'_>,
@@ -233,12 +233,12 @@ async fn handle_dataset_event(
     input_store: &Store,
     output_store: &Store,
     event: DatasetEvent,
-) -> Result<MQAEvent, Error> {
+) -> Result<MqaEvent, Error> {
     match event.event_type {
         DatasetEventType::DatasetHarvested => {
             let graph =
                 parse_rdf_graph_and_calculate_metrics(input_store, output_store, event.graph)?;
-            Ok(MQAEvent {
+            Ok(MqaEvent {
                 event_type: MQAEventType::PropertiesChecked,
                 fdk_id: event.fdk_id,
                 graph,

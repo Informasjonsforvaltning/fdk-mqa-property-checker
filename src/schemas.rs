@@ -11,7 +11,7 @@ pub enum InputEvent {
     Unknown { namespace: String, name: String },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum DatasetEventType {
     #[serde(rename = "DATASET_HARVESTED")]
     DatasetHarvested,
@@ -19,7 +19,7 @@ pub enum DatasetEventType {
     Unknown,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DatasetEvent {
     #[serde(rename = "type")]
     pub event_type: DatasetEventType,
@@ -29,8 +29,8 @@ pub struct DatasetEvent {
     pub timestamp: i64,
 }
 
-#[derive(Debug, Serialize)]
-pub struct MQAEvent {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MqaEvent {
     #[serde(rename = "type")]
     pub event_type: MQAEventType,
     #[serde(rename = "fdkId")]
@@ -38,7 +38,7 @@ pub struct MQAEvent {
     pub graph: String,
     pub timestamp: i64,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum MQAEventType {
     #[serde(rename = "PROPERTIES_CHECKED")]
     PropertiesChecked,
