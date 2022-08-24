@@ -9,7 +9,8 @@ use crate::{
         add_derived_from, add_five_star_annotation, add_property, add_quality_measurement,
         dump_graph_as_turtle, get_dataset_node, get_five_star_annotation, has_property,
         insert_dataset_assessment, insert_distribution_assessment, is_rdf_format,
-        list_distributions, list_formats, list_media_types, node_assessment, parse_turtle, list_licenses,
+        list_distributions, list_formats, list_licenses, list_media_types, node_assessment,
+        parse_turtle,
     },
     reference_data::{valid_file_type, valid_media_type, valid_open_license},
     vocab::{dcat, dcat_mqa, dcterms, oa},
@@ -242,9 +243,7 @@ fn calculate_distribution_metrics(
             Ok(Quad {
                 object: Term::NamedNode(nn),
                 ..
-            }) => {
-                valid_open_license(nn.as_str().to_string())
-            }
+            }) => valid_open_license(nn.as_str().to_string()),
             _ => false,
         });
 
@@ -352,7 +351,7 @@ mod tests {
     use crate::vocab::dcat_mqa;
 
     use super::*;
-    use oxigraph::model::{vocab, Subject, NamedNode};
+    use oxigraph::model::{vocab, Subject};
     use std::env;
 
     #[test]
@@ -680,14 +679,11 @@ mod tests {
                     Some(node.as_ref().into()),
                     Some(dcat_mqa::KNOWN_LICENSE),
                     None,
-                    None
+                    None,
                 )
                 .next()
                 .and_then(|d| match d {
-                    Ok(Quad {
-                        predicate: NamedNode(nn),
-                        ..
-                    }) => Some(nn),
+                    Ok(Quad { predicate: nn, .. }) => Some(nn),
                     _ => None,
                 })
                 .unwrap();
