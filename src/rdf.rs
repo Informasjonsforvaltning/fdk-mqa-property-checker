@@ -57,6 +57,16 @@ pub fn list_media_types(distribution: NamedNodeRef, store: &Store) -> QuadIter {
     )
 }
 
+/// Retrieve license
+pub fn list_licenses(distribution: NamedNodeRef, store: &Store) -> QuadIter {
+    store.quads_for_pattern(
+        Some(distribution.into()),
+        Some(dcterms::LICENSE.into()),
+        None,
+        None,
+    )
+}
+
 /// Retrieve dataset namednode
 pub fn get_dataset_node(store: &Store) -> Option<NamedNode> {
     list_datasets(&store).next().and_then(|d| match d {

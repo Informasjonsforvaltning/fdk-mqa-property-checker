@@ -41,6 +41,18 @@ pub struct FileType {
     pub media_type: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenLicenseCollection {
+    #[serde(rename = "openLicenses")]
+    pub open_licenses: Vec<OpenLicense>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenLicense {
+    pub uri: String,
+    pub code: String,
+}
+
 pub fn strip_http_scheme(uri: String) -> String {
     uri.replace("http://", "").replace("https://", "")
 }
@@ -55,6 +67,13 @@ pub fn valid_media_type(media_type: String) -> bool {
 pub fn valid_file_type(file_type: String) -> bool {
     match get_remote_file_types() {
         Some(file_types) => file_types.contains_key(strip_http_scheme(file_type).as_str()),
+        None => false,
+    }
+}
+
+pub fn valid_open_license(license: String) -> bool {
+    match get_remote_open_licenses() {
+        Some(open_licenses) => open_licenses.contains_key(strip_http_scheme(license).as_str()),
         None => false,
     }
 }
@@ -117,6 +136,33 @@ pub fn get_remote_file_types() -> Option<HashMap<String, FileType>> {
         },
         Err(e) => {
             tracing::warn!("Cannot get remote file-types {}", e);
+            None
+        }
+    }
+}
+
+#[cached(time = 86400)]
+pub fn get_remote_open_licenses() -> Option<HashMap<String, OpenLicense>> {
+    let response = reqwest::blocking::Client::new()
+        .get(format!("{}/reference-data/open-licenses", REFERENCE_DATA_BASE_URL.to_string()).as_str())
+        .headers(construct_headers())
+        .send();
+
+    match response {
+        Ok(resp) => match resp.json::<OpenLicenseCollection>() {
+            Ok(json) => Some(
+                json.open_licenses
+                    .into_iter()
+                    .map(|ft| (strip_http_scheme(ft.uri.clone()), ft))
+                    .collect::<HashMap<String, OpenLicense>>(),
+            ),
+            Err(e) => {
+                tracing::warn!("Cannot get remote open-licenses {}", e);
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!("Cannot get remote open-licenses {}", e);
             None
         }
     }
