@@ -9,9 +9,9 @@ use crate::{
         add_derived_from, add_five_star_annotation, add_property, add_quality_measurement,
         dump_graph_as_turtle, get_dataset_node, get_five_star_annotation, has_property,
         insert_dataset_assessment, insert_distribution_assessment, is_rdf_format,
-        list_distributions, list_formats, list_media_types, node_assessment, parse_turtle,
+        list_distributions, list_formats, list_media_types, node_assessment, parse_turtle, list_licenses,
     },
-    reference_data::{valid_file_type, valid_media_type},
+    reference_data::{valid_file_type, valid_media_type, valid_open_license},
     vocab::{dcat, dcat_mqa, dcterms, oa},
 };
 
@@ -195,7 +195,6 @@ fn calculate_distribution_metrics(
                 _ => false,
             });
 
-            // TODO check reference data
             is_format_machine_interpretable = false;
             is_format_non_proprietary = false;
 
@@ -239,12 +238,21 @@ fn calculate_distribution_metrics(
     )?;
 
     if has_license_property {
-        // TODO
+        let is_open_license: bool = list_licenses(dist_node, &store).any(|mt| match mt {
+            Ok(Quad {
+                object: Term::NamedNode(nn),
+                ..
+            }) => {
+                valid_open_license(nn.as_str().to_string())
+            }
+            _ => false,
+        });
+
         add_quality_measurement(
             dcat_mqa::KNOWN_LICENSE,
             dist_assessment_node,
             dist_node.into(),
-            false,
+            is_open_license,
             &metrics_store,
         )?;
 
@@ -253,7 +261,7 @@ fn calculate_distribution_metrics(
             dcat_mqa::OPEN_LICENSE,
             dist_assessment_node,
             dist_node.into(),
-            false,
+            is_open_license,
             &metrics_store,
         )?);
     }
@@ -344,7 +352,7 @@ mod tests {
     use crate::vocab::dcat_mqa;
 
     use super::*;
-    use oxigraph::model::{vocab, Subject};
+    use oxigraph::model::{vocab, Subject, NamedNode};
     use std::env;
 
     #[test]
@@ -376,6 +384,21 @@ mod tests {
                     {
                         "fileTypes": [
                             {"uri":"http://publications.europa.eu/resource/authority/file-type/7Z","code":"7Z","mediaType":"application/x-7z-compressed"}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        server.mock(|when, then| {
+            when.path("/reference-data/open-licenses");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "openLicenses":[
+                            {"uri":"http://creativecommons.org/licenses/by/4.0/","code":"CC BY 4.0","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/licenses/by/4.0/deed.no","code":"CC BY 4.0 DEED","isReplacedBy":"http://creativecommons.org/licenses/by/4.0/","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/publicdomain/zero/1.0/","code":"CC0 1.0","label":{"no":"Creative Commons Universal Fristatus-erklæring","en":"Creative Commons Universal Public Domain Dedication"}},{"uri":"http://data.norge.no/nlod/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/1.0","code":"NLOD10","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/2.0","code":"NLOD20","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}}
                         ]
                     }
                 "#,
@@ -534,7 +557,7 @@ mod tests {
             _:81ed38c70c900bb0456d35f0c1b94056 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
             _:81ed38c70c900bb0456d35f0c1b94056 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#atLeastFourStars> .
             _:81ed38c70c900bb0456d35f0c1b94056 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
-            _:88f83ad9cfc3a3ea547465f01018f437 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+            _:88f83ad9cfc3a3ea547465f01018f437 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
             _:88f83ad9cfc3a3ea547465f01018f437 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
             _:88f83ad9cfc3a3ea547465f01018f437 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#knownLicense> .
             _:88f83ad9cfc3a3ea547465f01018f437 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
@@ -651,6 +674,23 @@ mod tests {
                     )
                     .count()
             );
+
+            let known_license_assessment = store_actual
+                .quads_for_pattern(
+                    Some(node.as_ref().into()),
+                    Some(dcat_mqa::KNOWN_LICENSE),
+                    None,
+                    None
+                )
+                .next()
+                .and_then(|d| match d {
+                    Ok(Quad {
+                        predicate: NamedNode(nn),
+                        ..
+                    }) => Some(nn),
+                    _ => None,
+                })
+                .unwrap();
         } else {
             panic!("Distribution assessment is not a named node")
         };
