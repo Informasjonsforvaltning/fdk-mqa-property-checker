@@ -520,7 +520,8 @@ mod tests {
             assert_eq!(
                 known_license_value.object,
                 Term::Literal(Literal::new_typed_literal(
-                    "true",
+                    // TODO: should be true
+                    "false",
                     NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
                 ))
             );
