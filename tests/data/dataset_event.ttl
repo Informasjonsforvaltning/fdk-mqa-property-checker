@@ -21,7 +21,7 @@
     dcatnomqa:hasAssessment <http://dist.foo.assessment.no> ;
     dct:format <https://www.iana.org/assignments/media-types/application/vnd.openxmlformats-officedocument.spreadsheetml.sheet> , 
             <https://www.iana.org/assignments/media-types/text/csv> ; 
-    dct:license <http://data.norge.no/nlod/no/2.0> ; 
+    dct:license <http://publications.europa.eu/resource/authority/licence/NLOD_2_0> ; 
     dct:title "Bistandsresultater - bistand etter partner"@nb ; 
     dcat:accessURL <https://resultater.norad.no/partner/> .
     
