@@ -7,6 +7,8 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
+    IoError(#[from] std::io::Error),
+    #[error(transparent)]
     LoaderError(#[from] LoaderError),
     #[error(transparent)]
     StorageError(#[from] StorageError),
