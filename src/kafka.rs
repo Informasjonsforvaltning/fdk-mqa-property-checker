@@ -7,7 +7,7 @@ use apache_avro::schema::Name;
 use lazy_static::lazy_static;
 use oxigraph::store::Store;
 use rdkafka::{
-    config::{ClientConfig, RDKafkaLogLevel},
+    config::{ClientConfig},
     consumer::stream_consumer::StreamConsumer,
     consumer::Consumer,
     error::KafkaError,
