@@ -2373,9 +2373,9 @@ checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
 name = "oxigraph"
-version = "0.3.20"
+version = "0.3.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "567725a6e37505e2d4ccdefc9cfd1460923090a9fd2f978663cfe2f6c74a4dcb"
+checksum = "3285d2243e62417ee2cabeae86d3dcc07cfb7e5eaf1cd94b799d4f68f3d3a149"
 dependencies = [
  "digest",
  "getrandom",
@@ -2428,9 +2428,9 @@ dependencies = [
 
 [[package]]
 name = "oxrocksdb-sys"
-version = "0.3.20"
+version = "0.3.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a5f8cc6f81fac70986d70e9733105323a58353359ad77815457e6998ab37bb8"
+checksum = "9ae9dedf33a65029a914b6fb4abc117ead4d4a6e7af295d2979a76f77cb36190"
 dependencies = [
  "bindgen",
  "cc",
