@@ -1,0 +1,11 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - service-fdk-mqa-property-checker.yaml
+  - deployment-fdk-mqa-property-checker.yaml
+
+images:
+  - name: fdk-mqa-property-checker
+    newName: ghcr.io/informasjonsforvaltning/fdk-mqa-property-checker
+    newTag: $(GIT_COMMIT_SHA)
