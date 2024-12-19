@@ -1,4 +1,4 @@
-use oxigraph::io::GraphFormat;
+use oxigraph::io::{RdfFormat, RdfParser};
 use oxigraph::model::vocab::{rdf, xsd};
 use oxigraph::model::*;
 use oxigraph::store::{QuadIter, SerializerError, StorageError, Store};
@@ -8,11 +8,11 @@ use crate::vocab::{dcat, dcat_mqa, dcterms, dqv, prov};
 
 /// Parse Turtle RDF and load into store.
 pub fn parse_turtle(store: &Store, turtle: String) -> Result<(), Error> {
-    store.load_graph(
-        turtle.as_ref(),
-        GraphFormat::Turtle,
-        GraphNameRef::DefaultGraph,
-        None,
+    store.load_from_reader(
+        RdfParser::from_format(RdfFormat::Turtle)
+            .without_named_graphs()
+            .with_default_graph(GraphNameRef::DefaultGraph),
+        turtle.to_string().as_bytes().as_ref()
     )?;
     Ok(())
 }
@@ -289,7 +289,7 @@ pub fn add_quality_measurement(
 /// Dump graph as turtle string
 pub fn dump_graph_as_turtle(store: &Store) -> Result<Vec<u8>, SerializerError> {
     let mut buffer = Vec::new();
-    store.dump_graph(&mut buffer, GraphFormat::Turtle, GraphNameRef::DefaultGraph)?;
+    store.dump_graph_to_writer(GraphNameRef::DefaultGraph, RdfFormat::Turtle, &mut buffer)?;
     Ok(buffer)
 }
 
