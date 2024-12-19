@@ -13,7 +13,7 @@ futures = "0.3"
 http = "0.2.10"
 httpmock = "0.7.0"
 lazy_static = "1.5.0"
-oxigraph = "0.3.22"
+oxigraph = "0.4.4"
 prometheus = "0.13.3"
 rdkafka = { version = "0.37.0", features = ["cmake-build"] }
 reqwest = { version = "0.10.10", features = ["blocking", "json"] }
@@ -25,3 +25,8 @@ tokio = { version = "1.42.0", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber =  { version = "0.3.17", features = ["json", "env-filter", "tracing-log"] }
 uuid = { version = "1.11.0", features = ["v4"] }
+
+[dev-dependencies]
+sophia_api= "0.9.0"
+sophia_isomorphism = "0.9.0"
+sophia_turtle = "0.9.0"
