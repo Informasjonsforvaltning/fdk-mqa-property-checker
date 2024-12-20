@@ -242,7 +242,7 @@ async fn handle_dataset_event(
     match event.event_type {
         DatasetEventType::DatasetHarvested => {
             let graph =
-                parse_rdf_graph_and_calculate_metrics(input_store, output_store, event.graph)?;
+                parse_rdf_graph_and_calculate_metrics(input_store, output_store, event.graph).await?;
             Ok(MqaEvent {
                 event_type: MQAEventType::PropertiesChecked,
                 fdk_id: event.fdk_id,
