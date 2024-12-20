@@ -57,22 +57,22 @@ pub fn strip_http_scheme(uri: String) -> String {
     uri.replace("http://", "").replace("https://", "")
 }
 
-pub fn valid_media_type(media_type: String) -> bool {
-    match get_remote_media_types() {
+pub async fn valid_media_type(media_type: String) -> bool {
+    match get_remote_media_types().await {
         Some(media_types) => media_types.contains_key(strip_http_scheme(media_type).as_str()),
         None => false,
     }
 }
 
-pub fn valid_file_type(file_type: String) -> bool {
-    match get_remote_file_types() {
+pub async fn valid_file_type(file_type: String) -> bool {
+    match get_remote_file_types().await {
         Some(file_types) => file_types.contains_key(strip_http_scheme(file_type).as_str()),
         None => false,
     }
 }
 
-pub fn valid_open_license(license: String) -> bool {
-    match get_remote_open_licenses() {
+pub async fn valid_open_license(license: String) -> bool {
+    match get_remote_open_licenses().await {
         Some(open_licenses) => open_licenses.contains_key(strip_http_scheme(license).as_str()),
         None => false,
     }
@@ -88,14 +88,15 @@ fn construct_headers() -> HeaderMap {
 }
 
 #[cached(time = 86400)]
-pub fn get_remote_media_types() -> Option<HashMap<String, MediaType>> {
-    let response = reqwest::blocking::Client::new()
+pub async fn get_remote_media_types() -> Option<HashMap<String, MediaType>> {
+    let response = reqwest::Client::new()
         .get(format!("{}/reference-data/iana/media-types", REFERENCE_DATA_BASE_URL.to_string()).as_str())
         .headers(construct_headers())
-        .send();
+        .send()
+        .await;
 
     match response {
-        Ok(resp) => match resp.json::<MediaTypeCollection>() {
+        Ok(resp) => match resp.json::<MediaTypeCollection>().await {
             Ok(json) => Some(
                 json.media_types
                     .into_iter()
@@ -115,14 +116,15 @@ pub fn get_remote_media_types() -> Option<HashMap<String, MediaType>> {
 }
 
 #[cached(time = 86400)]
-pub fn get_remote_file_types() -> Option<HashMap<String, FileType>> {
-    let response = reqwest::blocking::Client::new()
+pub async fn get_remote_file_types() -> Option<HashMap<String, FileType>> {
+    let response = reqwest::Client::new()
         .get(format!("{}/reference-data/eu/file-types", REFERENCE_DATA_BASE_URL.to_string()).as_str())
         .headers(construct_headers())
-        .send();
+        .send()
+        .await;
 
     match response {
-        Ok(resp) => match resp.json::<FileTypeCollection>() {
+        Ok(resp) => match resp.json::<FileTypeCollection>().await {
             Ok(json) => Some(
                 json.file_types
                     .into_iter()
@@ -142,14 +144,15 @@ pub fn get_remote_file_types() -> Option<HashMap<String, FileType>> {
 }
 
 #[cached(time = 86400)]
-pub fn get_remote_open_licenses() -> Option<HashMap<String, OpenLicense>> {
-    let response = reqwest::blocking::Client::new()
+pub async fn get_remote_open_licenses() -> Option<HashMap<String, OpenLicense>> {
+    let response = reqwest::Client::new()
         .get(format!("{}/reference-data/open-licenses", REFERENCE_DATA_BASE_URL.to_string()).as_str())
         .headers(construct_headers())
-        .send();
+        .send()
+        .await;
 
     match response {
-        Ok(resp) => match resp.json::<OpenLicenseCollection>() {
+        Ok(resp) => match resp.json::<OpenLicenseCollection>().await {
             Ok(json) => Some(
                 json.open_licenses
                     .into_iter()

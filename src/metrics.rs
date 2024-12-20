@@ -1,8 +1,8 @@
+use futures::StreamExt;
 use oxigraph::{
     model::{BlankNode, NamedNodeRef, Quad, Term},
     store::{StorageError, Store},
 };
-
 use crate::{
     error::Error,
     rdf::{
@@ -16,7 +16,7 @@ use crate::{
     vocab::{dcat, dcat_mqa, dcterms, oa},
 };
 
-pub fn parse_rdf_graph_and_calculate_metrics(
+pub async fn parse_rdf_graph_and_calculate_metrics(
     input_store: &Store,
     output_store: &Store,
     graph: String,
@@ -25,15 +25,15 @@ pub fn parse_rdf_graph_and_calculate_metrics(
     output_store.clear()?;
     parse_turtle(input_store, graph)?;
     let dataset_node = get_dataset_node(input_store).ok_or("Dataset node not found in graph")?;
-    calculate_metrics(dataset_node.as_ref(), input_store, output_store)?;
+    let _ = calculate_metrics(dataset_node.as_ref(), input_store, output_store).await;
     let bytes = dump_graph_as_turtle(output_store)?;
     let turtle = std::str::from_utf8(bytes.as_slice())
         .map_err(|e| format!("Failed converting graph to string: {}", e))?;
     Ok(turtle.to_string())
 }
 
-fn calculate_metrics(
-    dataset_node: NamedNodeRef,
+async fn calculate_metrics(
+    dataset_node: NamedNodeRef<'_>,
     input_store: &Store,
     output_store: &Store,
 ) -> Result<(), Error> {
@@ -107,7 +107,7 @@ fn calculate_metrics(
             distribution.as_ref(),
             input_store,
             output_store,
-        )?;
+        ).await?;
     }
 
     match get_five_star_annotation(output_store) {
@@ -125,9 +125,9 @@ fn calculate_metrics(
     Ok(())
 }
 
-fn calculate_distribution_metrics(
-    dist_assessment_node: NamedNodeRef,
-    dist_node: NamedNodeRef,
+async fn calculate_distribution_metrics(
+    dist_assessment_node: NamedNodeRef<'_>,
+    dist_node: NamedNodeRef<'_>,
     store: &Store,
     metrics_store: &Store,
 ) -> Result<(), StorageError> {
@@ -175,17 +175,22 @@ fn calculate_distribution_metrics(
     let has_media_type_property = has_property(dist_node.into(), dcat::MEDIA_TYPE, &store);
     let has_license_property = has_property(dist_node.into(), dcterms::LICENSE, &store);
 
+    let mut formats: Vec<String> = Vec::new();
+    list_formats(dist_node, &store).for_each(|mt| match mt {
+        Ok(Quad {
+               object: Term::NamedNode(nn),
+               ..
+           }) => formats.push(nn.as_str().to_string()),
+        _ => {},
+    });
+
     if has_format_property {
-        is_format_aligned = list_formats(dist_node, &store).any(|mt| match mt {
-            Ok(Quad {
-                object: Term::NamedNode(nn),
-                ..
-            }) => {
-                valid_file_type(nn.as_str().to_string())
-                    || valid_media_type(nn.as_str().to_string())
-            }
-            _ => false,
-        });
+        is_format_aligned = futures::stream::iter(formats)
+            .any(|format| async move {
+                valid_file_type(format.to_string()).await
+                    || valid_media_type(format.to_string()).await
+            })
+            .await;
 
         if is_format_aligned {
             is_format_rdf = list_formats(dist_node, &store).any(|mt| match mt {
@@ -217,17 +222,21 @@ fn calculate_distribution_metrics(
         }
     }
 
+    let mut media_types: Vec<String> = Vec::new();
+    list_media_types(dist_node, &store).for_each(|mt| match mt {
+        Ok(Quad {
+               object: Term::NamedNode(nn),
+               ..
+           }) => media_types.push(nn.as_str().to_string()),
+        _ => {},
+    });
+
     if has_media_type_property {
-        is_media_type_aligned = list_media_types(dist_node, &store).any(|mt| match mt {
-            Ok(Quad {
-                object: Term::NamedNode(nn),
-                ..
-            }) => {
-                valid_file_type(nn.as_str().to_string())
-                    || valid_media_type(nn.as_str().to_string())
-            }
-            _ => false,
-        });
+        is_media_type_aligned = futures::stream::iter(media_types)
+            .any(|media_type| async move {
+                valid_file_type(media_type.to_string()).await
+                    || valid_media_type(media_type.to_string()).await
+            }).await;
     }
 
     add_quality_measurement(
@@ -238,14 +247,20 @@ fn calculate_distribution_metrics(
         &metrics_store,
     )?;
 
+    let mut licenses: Vec<String> = Vec::new();
+    list_licenses(dist_node, &store).for_each(|mt| match mt {
+        Ok(Quad {
+               object: Term::NamedNode(nn),
+               ..
+           }) => licenses.push(nn.as_str().to_string()),
+        _ => {},
+    });
+
     if has_license_property {
-        let is_open_license: bool = list_licenses(dist_node, &store).any(|mt| match mt {
-            Ok(Quad {
-                object: Term::NamedNode(nn),
-                ..
-            }) => valid_open_license(nn.as_str().to_string()),
-            _ => false,
-        });
+        let is_open_license: bool = futures::stream::iter(licenses)
+            .any(|license| async move {
+                valid_open_license(license.to_string()).await
+            }).await;
 
         add_quality_measurement(
             dcat_mqa::KNOWN_LICENSE,
@@ -353,6 +368,7 @@ mod tests {
     use super::*;
     use oxigraph::model::{vocab, Literal, Subject};
     use std::env;
+    use tokio::runtime::Runtime;
 
     #[test]
     fn test_parse_graph_anc_collect_metrics() {
@@ -409,10 +425,12 @@ mod tests {
             format!("http://{}", server.address()),
         );
 
-        let mqa_graph = parse_rdf_graph_and_calculate_metrics(
-            &mut Store::new().unwrap(),
-            &mut Store::new().unwrap(),
-            include_str!("../tests/data/dataset_event.ttl").to_string(),
+        let mqa_graph = Runtime::new().unwrap().block_on(
+            parse_rdf_graph_and_calculate_metrics(
+                &mut Store::new().unwrap(),
+                &mut Store::new().unwrap(),
+                include_str!("../tests/data/dataset_event.ttl").to_string(),
+            )
         )
         .unwrap();
 
