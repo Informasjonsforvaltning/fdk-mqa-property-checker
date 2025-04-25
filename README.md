@@ -1,46 +1,72 @@
-# fdk-mqa-property-checker
+# FDK MQA Property Checker
 
-This service is part of the Metadata Quality Assessment stack. This service listens to dataset harvested events (Kafka) and
-checks if the dataset has defined/set specific properties. Results are stored in a DQV metrics model which is
-stored in the MQA event topic (Kafka).
+This service is a component of the Metadata Quality Assessment (MQA) stack. It listens to dataset harvested events from 
+Kafka and verifies whether specific properties are defined or set for the datasets. The results of these checks are 
+stored in a Data Quality Vocabulary (DQV) metrics model and published to the MQA event topic in Kafka for further 
+processing.
 
-## Install
+For a broader understanding of the system’s context, refer to the [architecture documentation](https://github.com/Informasjonsforvaltning/architecture-documentation) wiki. For more specific 
+context on this application, see the [Metadata Quality](https://github.com/Informasjonsforvaltning/architecture-documentation/wiki/Architecture-documentation#-metadata-quality) subsystem section.
+
+## Getting Started
+These instructions will give you a copy of the project up and running on your local machine for development and testing purposes.
+
+### Prerequisites
+
+Ensure you have the following installed:
+- [Rust](https://www.rust-lang.org/tools/install)
+- [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+- [Docker](https://docs.docker.com/get-docker/)
+- [Docker Compose](https://docs.docker.com/compose/install/)
 
 Install required packages (Debian):
 
 `sudo apt update && sudo apt install -y build-essential clang cmake libssl-dev pkg-config`
 
-
 Install Rust:
 
 `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
-## Code formatting
-
-Format source code:
+### Format source code
 
 `rustfmt --edition 2021 src/*`
 
-## Build
+### Running locally
+
+Clone the repository:
+
+```bash
+git clone https://github.com/Informasjonsforvaltning/fdk-mqa-property-checker.git
+cd fdk-mqa-property-checker
+```
 
 Build for development:
 
-`cargo build --verbose`
+```
+cargo build --verbose
+```
 
 Build release:
 
-`cargo build --release`
+```
+cargo build --release
+```
 
-## Run application
+Start Kafka (Docker Compose) and the application
 
-`./target/release/fdk-mqa-property-checker`
+```
+docker compose up -d
+./target/release/fdk-mqa-property-checker
+```
 
 Show help:
 
-`./target/release/fdk-mqa-property-checker --help`
+```
+./target/release/fdk-mqa-property-checker --help
+```
 
-## Kafka
+### Running tests
 
-Use this project to run your local Kafka cluster
-
-<https://github.com/Informasjonsforvaltning/fdk-event-streaming-service>
+```
+cargo test ./tests
+```
