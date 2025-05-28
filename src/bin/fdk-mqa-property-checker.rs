@@ -73,7 +73,7 @@ async fn main() {
             .map(|f| f.map_err(|e| e.into())),
     );
 
-    (0..2)
+    (0..4)
         .map(|i| tokio::spawn(run_async_processor(i, sr_settings.clone())))
         .chain(std::iter::once(http_server))
         .collect::<FuturesUnordered<_>>()
