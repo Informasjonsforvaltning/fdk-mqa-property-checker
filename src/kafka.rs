@@ -68,7 +68,7 @@ pub fn create_consumer() -> Result<StreamConsumer, KafkaError> {
         .set("auto.offset.reset", "beginning")
         .set("api.version.request", "false")
         .set("security.protocol", "plaintext")
-        .set("max.partition.fetch.bytes", "2097152")
+        .set("max.partition.fetch.bytes", "1048576")
         .create()?;
     consumer.subscribe(&[&INPUT_TOPIC])?;
     Ok(consumer)
@@ -96,12 +96,11 @@ pub async fn run_async_processor(worker_id: usize, sr_settings: SrSettings) -> R
     let producer = create_producer()?;
     let mut encoder = AvroEncoder::new(sr_settings.clone());
     let mut decoder = AvroDecoder::new(sr_settings);
-    
+    let input_store = Store::new()?;
+    let output_store = Store::new()?;
+
     tracing::info!(worker_id, "listening for messages");
     loop {
-        let input_store = Store::new()?;
-        let output_store = Store::new()?;
-        
         let message = consumer.recv().await?;
         let span = tracing::span!(
             Level::INFO,
