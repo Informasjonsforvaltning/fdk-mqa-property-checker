@@ -7,7 +7,7 @@ use apache_avro::schema::Name;
 use lazy_static::lazy_static;
 use oxigraph::store::Store;
 use rdkafka::{
-    config::{ClientConfig},
+    config::ClientConfig,
     consumer::stream_consumer::StreamConsumer,
     consumer::Consumer,
     error::KafkaError,
@@ -96,11 +96,12 @@ pub async fn run_async_processor(worker_id: usize, sr_settings: SrSettings) -> R
     let producer = create_producer()?;
     let mut encoder = AvroEncoder::new(sr_settings.clone());
     let mut decoder = AvroDecoder::new(sr_settings);
-    let input_store = Store::new()?;
-    let output_store = Store::new()?;
 
     tracing::info!(worker_id, "listening for messages");
     loop {
+        let input_store = Store::new()?;
+        let output_store = Store::new()?;
+
         let message = consumer.recv().await?;
         let span = tracing::span!(
             Level::INFO,
@@ -197,6 +198,7 @@ pub async fn handle_message(
 
             let record: FutureRecord<String, Vec<u8>> =
                 FutureRecord::to(&OUTPUT_TOPIC).key(&key).payload(&encoded);
+
             producer
                 .send(record, Duration::from_secs(0))
                 .await
@@ -243,7 +245,8 @@ async fn handle_dataset_event(
     match event.event_type {
         DatasetEventType::DatasetHarvested => {
             let graph =
-                parse_rdf_graph_and_calculate_metrics(input_store, output_store, event.graph).await?;
+                parse_rdf_graph_and_calculate_metrics(input_store, output_store, event.graph)
+                    .await?;
             Ok(MqaEvent {
                 event_type: MQAEventType::PropertiesChecked,
                 fdk_id: event.fdk_id,
