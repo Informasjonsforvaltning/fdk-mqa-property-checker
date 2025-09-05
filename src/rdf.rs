@@ -67,6 +67,16 @@ pub fn list_licenses(distribution: NamedNodeRef, store: &Store) -> QuadIter {
     )
 }
 
+/// Retrieve access rights
+pub fn list_access_rights(dataset: NamedNodeRef, store: &Store) -> QuadIter {
+    store.quads_for_pattern(
+        Some(dataset.into()),
+        Some(dcterms::ACCESS_RIGHTS.into()),
+        None,
+        None,
+    )
+}
+
 /// Retrieve dataset namednode
 pub fn get_dataset_node(store: &Store) -> Option<NamedNode> {
     list_datasets(&store).next().and_then(|d| match d {

@@ -9,10 +9,10 @@ use crate::{
         add_derived_from, add_five_star_annotation, add_property, add_quality_measurement,
         dump_graph_as_turtle, get_dataset_node, get_five_star_annotation, has_property,
         insert_dataset_assessment, insert_distribution_assessment, is_rdf_format,
-        list_distributions, list_formats, list_licenses, list_media_types, node_assessment,
+        list_access_rights, list_distributions, list_formats, list_licenses, list_media_types, node_assessment,
         parse_turtle,
     },
-    reference_data::{valid_file_type, valid_media_type, valid_open_license},
+    reference_data::{valid_file_type, valid_media_type, valid_open_license, valid_access_right},
     vocab::{dcat, dcat_mqa, dcterms, oa},
 };
 
@@ -73,12 +73,31 @@ async fn calculate_metrics(
         )?;
     }
 
-    // TODO Verify if valid license uri
+    // Check if access rights align with controlled vocabulary
+    let mut access_rights: Vec<String> = Vec::new();
+    list_access_rights(dataset_node, input_store).for_each(|ar| match ar {
+        Ok(Quad {
+               object: Term::NamedNode(nn),
+               ..
+           }) => access_rights.push(nn.as_str().to_string()),
+        _ => {},
+    });
+
+    let has_access_rights_property = has_property(dataset_node.into(), dcterms::ACCESS_RIGHTS, input_store);
+    let is_access_rights_aligned = if has_access_rights_property {
+        futures::stream::iter(access_rights)
+            .any(|access_right| async move {
+                valid_access_right(access_right.to_string()).await
+            }).await
+    } else {
+        false
+    };
+
     add_quality_measurement(
         dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT,
         dataset_assessment.as_ref(),
         dataset_node.into(),
-        false,
+        is_access_rights_aligned,
         &output_store,
     )?;
 
@@ -411,7 +430,27 @@ mod tests {
                     r#"
                     {
                         "openLicenses":[
-                            {"uri":"http://creativecommons.org/licenses/by/4.0/","code":"CC BY 4.0","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/licenses/by/4.0/deed.no","code":"CC BY 4.0 DEED","isReplacedBy":"http://creativecommons.org/licenses/by/4.0/","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/publicdomain/zero/1.0/","code":"CC0 1.0","label":{"no":"Creative Commons Universal Fristatus-erklæring","en":"Creative Commons Universal Public Domain Dedication"}},{"uri":"http://data.norge.no/nlod/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/1.0","code":"NLOD10","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/2.0","code":"NLOD20","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}}
+                            {"uri":"http://creativecommons.org/licenses/by/4.0/","code":"CC BY 4.0","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/licenses/by/4.0/deed.no","code":"CC BY 4.0 DEED","isReplacedBy":"http://creativecommons.org/licenses/by/4.0/","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/publicdomain/zero/1.0/","code":"CC0 1.0","label":{"no":"Creative Commons Universal Fristatus-erklæring","en":"Creative Commons Universal Public Domain Dedication"}},{"uri":"http://data.norge.no/nlod/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/1.0","code":"NLOD10","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/2.0","code":"NLOD20","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://publications.europa.eu/resource/authority/licence/NLOD_2_0","code":"NLOD_2_0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        server.mock(|when, then| {
+            when.path("/reference-data/eu/access-rights");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "accessRights":[
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/CONFIDENTIAL","code":"CONFIDENTIAL","label":{"en":"confidential"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/NON_PUBLIC","code":"NON_PUBLIC","label":{"en":"non-public"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/NORMAL","code":"NORMAL","label":{"en":"normal"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/RESTRICTED","code":"RESTRICTED","label":{"en":"restricted"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/SENSITIVE","code":"SENSITIVE","label":{"en":"sensitive"}}
                         ]
                     }
                 "#,
@@ -536,13 +575,262 @@ mod tests {
             assert_eq!(
                 known_license_value.object,
                 Term::Literal(Literal::new_typed_literal(
-                    // TODO: should be true
-                    "false",
+                    "true",
                     NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
                 ))
             );
         } else {
             panic!("Distribution assessment is not a named node")
         };
+
+        // Clean up environment variable
+        env::remove_var("REFERENCE_DATA_BASE_URL");
+    }
+
+    #[test]
+    fn test_access_rights_vocabulary_alignment_valid() {
+        let server = httpmock::MockServer::start();
+
+        // Mock access rights endpoint
+        server.mock(|when, then| {
+            when.path("/reference-data/eu/access-rights");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "accessRights":[
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        env::set_var(
+            "REFERENCE_DATA_BASE_URL",
+            format!("http://{}", server.address()),
+        );
+
+        let input_ttl = r#"
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix dcatnomqa: <https://data.norge.no/vocabulary/dcatno-mqa#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+<http://example.com/dataset> rdf:type dcat:Dataset ;
+    dcatnomqa:hasAssessment <http://dataset.assessment.no> ;
+    dct:accessRights <http://publications.europa.eu/resource/authority/access-right/PUBLIC> .
+"#;
+
+        let mqa_graph = Runtime::new().unwrap().block_on(
+            parse_rdf_graph_and_calculate_metrics(
+                &mut Store::new().unwrap(),
+                &mut Store::new().unwrap(),
+                input_ttl.to_string(),
+            )
+        )
+        .unwrap();
+
+        let store = Store::new().unwrap();
+        parse_turtle(&store, mqa_graph).unwrap();
+
+        // Check that access rights vocabulary alignment is true
+        let access_rights_measurement = store
+            .quads_for_pattern(
+                None,
+                None,
+                Some(dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT.into()),
+                None,
+            )
+            .next()
+            .expect("Access rights vocabulary alignment measurement not found")
+            .unwrap();
+
+        let value_quad = store
+            .quads_for_pattern(
+                Some(access_rights_measurement.subject.as_ref()),
+                Some(dqv::VALUE.into()),
+                None,
+                None,
+            )
+            .next()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            value_quad.object,
+            Term::Literal(Literal::new_typed_literal(
+                "true",
+                NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
+            ))
+        );
+
+        // Clean up environment variable
+        env::remove_var("REFERENCE_DATA_BASE_URL");
+    }
+
+    #[test]
+    fn test_access_rights_vocabulary_alignment_invalid() {
+        let server = httpmock::MockServer::start();
+
+        // Mock access rights endpoint
+        server.mock(|when, then| {
+            when.path("/reference-data/eu/access-rights");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "accessRights":[
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        env::set_var(
+            "REFERENCE_DATA_BASE_URL",
+            format!("http://{}", server.address()),
+        );
+
+        let input_ttl = r#"
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix dcatnomqa: <https://data.norge.no/vocabulary/dcatno-mqa#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+<http://example.com/dataset> rdf:type dcat:Dataset ;
+    dcatnomqa:hasAssessment <http://dataset.assessment.no> ;
+    dct:accessRights <http://example.com/invalid-access-right> .
+"#;
+
+        let mqa_graph = Runtime::new().unwrap().block_on(
+            parse_rdf_graph_and_calculate_metrics(
+                &mut Store::new().unwrap(),
+                &mut Store::new().unwrap(),
+                input_ttl.to_string(),
+            )
+        )
+        .unwrap();
+
+        let store = Store::new().unwrap();
+        parse_turtle(&store, mqa_graph).unwrap();
+
+        // Check that access rights vocabulary alignment is false
+        let access_rights_measurement = store
+            .quads_for_pattern(
+                None,
+                None,
+                Some(dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT.into()),
+                None,
+            )
+            .next()
+            .expect("Access rights vocabulary alignment measurement not found")
+            .unwrap();
+
+        let value_quad = store
+            .quads_for_pattern(
+                Some(access_rights_measurement.subject.as_ref()),
+                Some(dqv::VALUE.into()),
+                None,
+                None,
+            )
+            .next()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            value_quad.object,
+            Term::Literal(Literal::new_typed_literal(
+                "false",
+                NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
+            ))
+        );
+
+        // Clean up environment variable
+        env::remove_var("REFERENCE_DATA_BASE_URL");
+    }
+
+    #[test]
+    fn test_access_rights_vocabulary_alignment_no_access_rights() {
+        let server = httpmock::MockServer::start();
+
+        // Mock access rights endpoint
+        server.mock(|when, then| {
+            when.path("/reference-data/eu/access-rights");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "accessRights":[
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        env::set_var(
+            "REFERENCE_DATA_BASE_URL",
+            format!("http://{}", server.address()),
+        );
+
+        let input_ttl = r#"
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix dcatnomqa: <https://data.norge.no/vocabulary/dcatno-mqa#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+<http://example.com/dataset> rdf:type dcat:Dataset ;
+    dcatnomqa:hasAssessment <http://dataset.assessment.no> .
+"#;
+
+        let mqa_graph = Runtime::new().unwrap().block_on(
+            parse_rdf_graph_and_calculate_metrics(
+                &mut Store::new().unwrap(),
+                &mut Store::new().unwrap(),
+                input_ttl.to_string(),
+            )
+        )
+        .unwrap();
+
+        let store = Store::new().unwrap();
+        parse_turtle(&store, mqa_graph).unwrap();
+
+        // Check that access rights vocabulary alignment is false when no access rights property exists
+        let access_rights_measurement = store
+            .quads_for_pattern(
+                None,
+                None,
+                Some(dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT.into()),
+                None,
+            )
+            .next()
+            .expect("Access rights vocabulary alignment measurement not found")
+            .unwrap();
+
+        let value_quad = store
+            .quads_for_pattern(
+                Some(access_rights_measurement.subject.as_ref()),
+                Some(dqv::VALUE.into()),
+                None,
+                None,
+            )
+            .next()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            value_quad.object,
+            Term::Literal(Literal::new_typed_literal(
+                "false",
+                NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
+            ))
+        );
+
+        // Clean up environment variable
+        env::remove_var("REFERENCE_DATA_BASE_URL");
     }
 }
