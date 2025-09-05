@@ -64,7 +64,7 @@ _:36f67131cd1db53fe6a93b49883f2c40 <http://www.w3.org/ns/dqv#value> "false"^^<ht
 _:36f67131cd1db53fe6a93b49883f2c40 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
 _:36f67131cd1db53fe6a93b49883f2c40 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#formatMediaTypeMachineInterpretable> .
 _:36f67131cd1db53fe6a93b49883f2c40 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572/.well-known/skolem/1> .
-_:3d18702ae85cee4e17b0919ece050427 <http://www.w3.org/ns/dqv#value> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+_:3d18702ae85cee4e17b0919ece050427 <http://www.w3.org/ns/dqv#value> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:3d18702ae85cee4e17b0919ece050427 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .
 _:3d18702ae85cee4e17b0919ece050427 <http://www.w3.org/ns/dqv#isMeasurementOf> <https://data.norge.no/vocabulary/dcatno-mqa#accessRightsVocabularyAlignment> .
 _:3d18702ae85cee4e17b0919ece050427 <http://www.w3.org/ns/dqv#computedOn> <https://registrering.fellesdatakatalog.digdir.no/catalogs/971277882/datasets/29a2bf37-5867-4c90-bc74-5a8c4e118572> .

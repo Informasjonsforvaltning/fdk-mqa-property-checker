@@ -21,8 +21,11 @@ pub struct MediaTypeCollection {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MediaType {
     pub uri: String,
+    #[allow(dead_code)]
     pub name: String,
+    #[allow(dead_code)]
     pub r#type: String,
+    #[allow(dead_code)]
     #[serde(rename = "subType")]
     pub sub_type: String,
 }
@@ -36,7 +39,9 @@ pub struct FileTypeCollection {
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileType {
     pub uri: String,
+    #[allow(dead_code)]
     pub code: String,
+    #[allow(dead_code)]
     #[serde(rename = "mediaType")]
     pub media_type: String,
 }
@@ -50,7 +55,23 @@ pub struct OpenLicenseCollection {
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenLicense {
     pub uri: String,
+    #[allow(dead_code)]
     pub code: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccessRightsCollection {
+    #[serde(rename = "accessRights")]
+    pub access_rights: Vec<AccessRight>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccessRight {
+    pub uri: String,
+    #[allow(dead_code)]
+    pub code: String,
+    #[allow(dead_code)]
+    pub label: std::collections::HashMap<String, String>,
 }
 
 pub fn strip_http_scheme(uri: String) -> String {
@@ -74,6 +95,13 @@ pub async fn valid_file_type(file_type: String) -> bool {
 pub async fn valid_open_license(license: String) -> bool {
     match get_remote_open_licenses().await {
         Some(open_licenses) => open_licenses.contains_key(strip_http_scheme(license).as_str()),
+        None => false,
+    }
+}
+
+pub async fn valid_access_right(access_right: String) -> bool {
+    match get_remote_access_rights().await {
+        Some(access_rights) => access_rights.contains_key(strip_http_scheme(access_right).as_str()),
         None => false,
     }
 }
@@ -166,6 +194,34 @@ pub async fn get_remote_open_licenses() -> Option<HashMap<String, OpenLicense>> 
         },
         Err(e) => {
             tracing::warn!("Cannot get remote open-licenses {}", e);
+            None
+        }
+    }
+}
+
+#[cached(time = 86400)]
+pub async fn get_remote_access_rights() -> Option<HashMap<String, AccessRight>> {
+    let response = reqwest::Client::new()
+        .get(format!("{}/reference-data/eu/access-rights", REFERENCE_DATA_BASE_URL.to_string()).as_str())
+        .headers(construct_headers())
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) => match resp.json::<AccessRightsCollection>().await {
+            Ok(json) => Some(
+                json.access_rights
+                    .into_iter()
+                    .map(|ar| (strip_http_scheme(ar.uri.clone()), ar))
+                    .collect::<HashMap<String, AccessRight>>(),
+            ),
+            Err(e) => {
+                tracing::warn!("Cannot get remote access-rights {}", e);
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!("Cannot get remote access-rights {}", e);
             None
         }
     }

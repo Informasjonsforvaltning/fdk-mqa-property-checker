@@ -30,6 +30,7 @@ async fn test() {
     .await;
 }
 
+
 pub async fn process_single_message(consumer: StreamConsumer) {
     let producer = create_producer().unwrap();
     let mut encoder = AvroEncoder::new(create_sr_settings().unwrap());
