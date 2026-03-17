@@ -91,6 +91,8 @@ pub async fn register_schema(
             schema_type: SchemaType::Avro,
             schema: schema_str.to_string(),
             references: vec![],
+            properties: None,
+            tags: None,
         },
     )
     .await?;
