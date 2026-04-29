@@ -383,7 +383,7 @@ mod tests {
     use crate::vocab::{dcat_mqa, dqv};
 
     use super::*;
-    use oxigraph::model::{vocab, Literal, Subject};
+    use oxigraph::model::{vocab, Literal, NamedOrBlankNode};
     use std::env;
     use tokio::runtime::Runtime;
 
@@ -499,7 +499,7 @@ mod tests {
             .next()
             .and_then(|d| match d {
                 Ok(Quad {
-                    subject: Subject::NamedNode(s),
+                    subject: NamedOrBlankNode::NamedNode(s),
                     ..
                 }) => Some(s),
                 _ => None,

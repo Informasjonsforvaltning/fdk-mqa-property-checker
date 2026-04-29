@@ -18,7 +18,7 @@ pub fn parse_turtle(store: &Store, turtle: String) -> Result<(), Error> {
 }
 
 /// Retrieve datasets
-pub fn list_datasets(store: &Store) -> QuadIter {
+pub fn list_datasets(store: &Store) -> QuadIter<'_> {
     store.quads_for_pattern(
         None,
         Some(rdf::TYPE),
@@ -28,7 +28,7 @@ pub fn list_datasets(store: &Store) -> QuadIter {
 }
 
 /// Retrieve distributions of a dataset
-pub fn list_distributions(dataset: NamedNodeRef, store: &Store) -> QuadIter {
+pub fn list_distributions<'a>(dataset: NamedNodeRef<'a>, store: &'a Store) -> QuadIter<'a> {
     store.quads_for_pattern(
         Some(dataset.into()),
         Some(dcat::DISTRIBUTION.into()),
@@ -38,7 +38,7 @@ pub fn list_distributions(dataset: NamedNodeRef, store: &Store) -> QuadIter {
 }
 
 /// Retrieve distribution formats
-pub fn list_formats(distribution: NamedNodeRef, store: &Store) -> QuadIter {
+pub fn list_formats<'a>(distribution: NamedNodeRef<'a>, store: &'a Store) -> QuadIter<'a> {
     store.quads_for_pattern(
         Some(distribution.into()),
         Some(dcterms::FORMAT.into()),
@@ -48,7 +48,7 @@ pub fn list_formats(distribution: NamedNodeRef, store: &Store) -> QuadIter {
 }
 
 /// Retrieve distribution media-types
-pub fn list_media_types(distribution: NamedNodeRef, store: &Store) -> QuadIter {
+pub fn list_media_types<'a>(distribution: NamedNodeRef<'a>, store: &'a Store) -> QuadIter<'a> {
     store.quads_for_pattern(
         Some(distribution.into()),
         Some(dcat::MEDIA_TYPE.into()),
@@ -58,7 +58,7 @@ pub fn list_media_types(distribution: NamedNodeRef, store: &Store) -> QuadIter {
 }
 
 /// Retrieve license
-pub fn list_licenses(distribution: NamedNodeRef, store: &Store) -> QuadIter {
+pub fn list_licenses<'a>(distribution: NamedNodeRef<'a>, store: &'a Store) -> QuadIter<'a> {
     store.quads_for_pattern(
         Some(distribution.into()),
         Some(dcterms::LICENSE.into()),
@@ -68,7 +68,7 @@ pub fn list_licenses(distribution: NamedNodeRef, store: &Store) -> QuadIter {
 }
 
 /// Retrieve access rights
-pub fn list_access_rights(dataset: NamedNodeRef, store: &Store) -> QuadIter {
+pub fn list_access_rights<'a>(dataset: NamedNodeRef<'a>, store: &'a Store) -> QuadIter<'a> {
     store.quads_for_pattern(
         Some(dataset.into()),
         Some(dcterms::ACCESS_RIGHTS.into()),
@@ -81,7 +81,7 @@ pub fn list_access_rights(dataset: NamedNodeRef, store: &Store) -> QuadIter {
 pub fn get_dataset_node(store: &Store) -> Option<NamedNode> {
     list_datasets(&store).next().and_then(|d| match d {
         Ok(Quad {
-            subject: Subject::NamedNode(n),
+            subject: NamedOrBlankNode::NamedNode(n),
             ..
         }) => Some(n),
         _ => None,
@@ -115,7 +115,7 @@ pub fn node_assessment(store: &Store, node: NamedNodeRef) -> Result<NamedNode, E
         })?
 }
 
-pub fn has_property(subject: SubjectRef, property: NamedNodeRef, store: &Store) -> bool {
+pub fn has_property(subject: NamedOrBlankNodeRef, property: NamedNodeRef, store: &Store) -> bool {
     store
         .quads_for_pattern(Some(subject), Some(property), None, None)
         .count()
@@ -123,7 +123,7 @@ pub fn has_property(subject: SubjectRef, property: NamedNodeRef, store: &Store) 
 }
 
 pub fn add_property(
-    subject: SubjectRef,
+    subject: NamedOrBlankNodeRef,
     property: NamedNodeRef,
     object: TermRef,
     store: &Store,
@@ -158,7 +158,7 @@ pub fn get_five_star_annotation(store: &Store) -> Option<BlankNode> {
         .next()
         .and_then(|r| match r {
             Ok(Quad {
-                subject: Subject::BlankNode(n),
+                subject: NamedOrBlankNode::BlankNode(n),
                 ..
             }) => Some(n),
             _ => None,
