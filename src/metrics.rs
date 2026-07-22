@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use oxigraph::{
     model::{BlankNode, NamedNodeRef, Quad, Term},
-    store::{StorageError, Store},
+    store::Store,
 };
 use crate::{
     error::Error,
@@ -23,6 +23,19 @@ struct FiveStarInputs {
     is_format_rdf: bool,
     /// Linked-data resource check not yet implemented.
     has_linked_resources: bool,
+}
+
+struct FormatCheckResult {
+    is_format_machine_interpretable: bool,
+    is_format_non_proprietary: bool,
+    is_format_rdf: bool,
+    machine_interpretable_derived_from: Option<BlankNode>,
+    non_proprietary_derived_from: Option<BlankNode>,
+}
+
+struct LicenseCheckResult {
+    is_open_license: bool,
+    open_license_derived_from: Option<BlankNode>,
 }
 
 struct FiveStarDerivedFrom {
@@ -57,7 +70,7 @@ fn attach_five_star_rating(
     metrics_store: &Store,
     inputs: &FiveStarInputs,
     derived_from: &FiveStarDerivedFrom,
-) -> Result<(), StorageError> {
+) -> Result<(), Error> {
     let five_star_quality_annotation = add_five_star_annotation(metrics_store)?;
     let rating = determine_star_rating(inputs);
 
@@ -121,7 +134,7 @@ pub async fn parse_rdf_graph_and_calculate_metrics(
 ) -> Result<String, Error> {
     parse_turtle(input_store, graph)?;
     let dataset_node = get_dataset_node(input_store).ok_or("Dataset node not found in graph")?;
-    let _ = calculate_metrics(dataset_node.as_ref(), input_store, output_store).await;
+    calculate_metrics(dataset_node.as_ref(), input_store, output_store).await?;
     let bytes = dump_graph_as_turtle(output_store)?;
     let turtle = std::str::from_utf8(bytes.as_slice())
         .map_err(|e| format!("Failed converting graph to string: {}", e))?;
@@ -245,7 +258,47 @@ async fn calculate_distribution_metrics(
     dist_node: NamedNodeRef<'_>,
     store: &Store,
     metrics_store: &Store,
-) -> Result<(), StorageError> {
+) -> Result<(), Error> {
+    add_distribution_availability_measurements(
+        dist_assessment_node,
+        dist_node,
+        store,
+        metrics_store,
+    )?;
+
+    let format_result =
+        check_format_and_media_type_alignment(dist_assessment_node, dist_node, store, metrics_store)
+            .await?;
+    let license_result =
+        check_license_metrics(dist_assessment_node, dist_node, store, metrics_store).await?;
+
+    attach_five_star_rating(
+        dist_assessment_node,
+        dist_node,
+        metrics_store,
+        &FiveStarInputs {
+            is_open_license: license_result.is_open_license,
+            is_format_machine_interpretable: format_result.is_format_machine_interpretable,
+            is_format_non_proprietary: format_result.is_format_non_proprietary,
+            is_format_rdf: format_result.is_format_rdf,
+            has_linked_resources: false,
+        },
+        &FiveStarDerivedFrom {
+            open_license: license_result.open_license_derived_from,
+            machine_interpretable: format_result.machine_interpretable_derived_from,
+            non_proprietary: format_result.non_proprietary_derived_from,
+        },
+    )?;
+
+    Ok(())
+}
+
+fn add_distribution_availability_measurements(
+    dist_assessment_node: NamedNodeRef<'_>,
+    dist_node: NamedNodeRef<'_>,
+    store: &Store,
+    metrics_store: &Store,
+) -> Result<(), Error> {
     for (metric, props) in vec![
         (dcat_mqa::BYTE_SIZE_AVAILABILITY, vec![dcat::BYTE_SIZE]),
         (dcat_mqa::DATE_ISSUED_AVAILABILITY, vec![dcterms::ISSUED]),
@@ -268,36 +321,39 @@ async fn calculate_distribution_metrics(
             dist_node.into(),
             props
                 .into_iter()
-                .any(|p| has_property(dist_node.into(), p, &store)),
-            &metrics_store,
+                .any(|p| has_property(dist_node.into(), p, store)),
+            metrics_store,
         )?;
     }
 
-    let mut five_star_open_license_derived_from: Option<BlankNode> = None;
-    let mut five_star_machine_interpretable_derived_from: Option<BlankNode> = None;
-    let mut five_star_non_proprietary_derived_from: Option<BlankNode> = None;
+    Ok(())
+}
 
-    let mut is_open_license = false;
-    let mut is_format_aligned = false;
+async fn check_format_and_media_type_alignment(
+    dist_assessment_node: NamedNodeRef<'_>,
+    dist_node: NamedNodeRef<'_>,
+    store: &Store,
+    metrics_store: &Store,
+) -> Result<FormatCheckResult, Error> {
     // Machine-interpretable and non-proprietary checks not yet implemented.
     let is_format_machine_interpretable = false;
     let is_format_non_proprietary = false;
     let mut is_format_rdf = false;
+    let mut is_format_aligned = false;
     let mut is_media_type_aligned = false;
-    // Linked-data resource check not yet implemented.
-    let has_linked_resources = false;
+    let mut machine_interpretable_derived_from = None;
+    let mut non_proprietary_derived_from = None;
 
-    let has_format_property = has_property(dist_node.into(), dcterms::FORMAT, &store);
-    let has_media_type_property = has_property(dist_node.into(), dcat::MEDIA_TYPE, &store);
-    let has_license_property = has_property(dist_node.into(), dcterms::LICENSE, &store);
+    let has_format_property = has_property(dist_node.into(), dcterms::FORMAT, store);
+    let has_media_type_property = has_property(dist_node.into(), dcat::MEDIA_TYPE, store);
 
     let mut formats: Vec<String> = Vec::new();
-    list_formats(dist_node, &store).for_each(|mt| match mt {
+    list_formats(dist_node, store).for_each(|mt| match mt {
         Ok(Quad {
-               object: Term::NamedNode(nn),
-               ..
-           }) => formats.push(nn.as_str().to_string()),
-        _ => {},
+            object: Term::NamedNode(nn),
+            ..
+        }) => formats.push(nn.as_str().to_string()),
+        _ => {}
     });
 
     if has_format_property {
@@ -309,7 +365,7 @@ async fn calculate_distribution_metrics(
             .await;
 
         if is_format_aligned {
-            is_format_rdf = list_formats(dist_node, &store).any(|mt| match mt {
+            is_format_rdf = list_formats(dist_node, store).any(|mt| match mt {
                 Ok(Quad {
                     object: Term::NamedNode(nn),
                     ..
@@ -317,31 +373,31 @@ async fn calculate_distribution_metrics(
                 _ => false,
             });
 
-            five_star_machine_interpretable_derived_from = Some(add_quality_measurement(
+            machine_interpretable_derived_from = Some(add_quality_measurement(
                 dcat_mqa::FORMAT_MEDIA_TYPE_MACHINE_INTERPRETABLE,
                 dist_assessment_node,
                 dist_node.into(),
                 is_format_machine_interpretable,
-                &metrics_store,
+                metrics_store,
             )?);
 
-            five_star_non_proprietary_derived_from = Some(add_quality_measurement(
+            non_proprietary_derived_from = Some(add_quality_measurement(
                 dcat_mqa::FORMAT_MEDIA_TYPE_NON_PROPRIETARY,
                 dist_assessment_node,
                 dist_node.into(),
                 is_format_non_proprietary,
-                &metrics_store,
+                metrics_store,
             )?);
         }
     }
 
     let mut media_types: Vec<String> = Vec::new();
-    list_media_types(dist_node, &store).for_each(|mt| match mt {
+    list_media_types(dist_node, store).for_each(|mt| match mt {
         Ok(Quad {
-               object: Term::NamedNode(nn),
-               ..
-           }) => media_types.push(nn.as_str().to_string()),
-        _ => {},
+            object: Term::NamedNode(nn),
+            ..
+        }) => media_types.push(nn.as_str().to_string()),
+        _ => {}
     });
 
     if has_media_type_property {
@@ -349,7 +405,8 @@ async fn calculate_distribution_metrics(
             .any(|media_type| async move {
                 valid_file_type(media_type.to_string()).await
                     || valid_media_type(media_type.to_string()).await
-            }).await;
+            })
+            .await;
     }
 
     add_quality_measurement(
@@ -357,23 +414,41 @@ async fn calculate_distribution_metrics(
         dist_assessment_node,
         dist_node.into(),
         is_format_aligned || is_media_type_aligned,
-        &metrics_store,
+        metrics_store,
     )?;
 
+    Ok(FormatCheckResult {
+        is_format_machine_interpretable,
+        is_format_non_proprietary,
+        is_format_rdf,
+        machine_interpretable_derived_from,
+        non_proprietary_derived_from,
+    })
+}
+
+async fn check_license_metrics(
+    dist_assessment_node: NamedNodeRef<'_>,
+    dist_node: NamedNodeRef<'_>,
+    store: &Store,
+    metrics_store: &Store,
+) -> Result<LicenseCheckResult, Error> {
+    let mut is_open_license = false;
+    let mut open_license_derived_from = None;
+
+    let has_license_property = has_property(dist_node.into(), dcterms::LICENSE, store);
+
     let mut licenses: Vec<String> = Vec::new();
-    list_licenses(dist_node, &store).for_each(|mt| match mt {
+    list_licenses(dist_node, store).for_each(|mt| match mt {
         Ok(Quad {
-               object: Term::NamedNode(nn),
-               ..
-           }) => licenses.push(nn.as_str().to_string()),
-        _ => {},
+            object: Term::NamedNode(nn),
+            ..
+        }) => licenses.push(nn.as_str().to_string()),
+        _ => {}
     });
 
     if has_license_property {
         is_open_license = futures::stream::iter(licenses)
-            .any(|license| async move {
-                valid_open_license(license.to_string()).await
-            })
+            .any(|license| async move { valid_open_license(license.to_string()).await })
             .await;
 
         add_quality_measurement(
@@ -381,39 +456,22 @@ async fn calculate_distribution_metrics(
             dist_assessment_node,
             dist_node.into(),
             is_open_license,
-            &metrics_store,
+            metrics_store,
         )?;
 
-        five_star_open_license_derived_from = Some(add_quality_measurement(
+        open_license_derived_from = Some(add_quality_measurement(
             dcat_mqa::OPEN_LICENSE,
             dist_assessment_node,
             dist_node.into(),
             is_open_license,
-            &metrics_store,
+            metrics_store,
         )?);
     }
 
-    let five_star_inputs = FiveStarInputs {
+    Ok(LicenseCheckResult {
         is_open_license,
-        is_format_machine_interpretable,
-        is_format_non_proprietary,
-        is_format_rdf,
-        has_linked_resources,
-    };
-
-    attach_five_star_rating(
-        dist_assessment_node,
-        dist_node,
-        &metrics_store,
-        &five_star_inputs,
-        &FiveStarDerivedFrom {
-            open_license: five_star_open_license_derived_from,
-            machine_interpretable: five_star_machine_interpretable_derived_from,
-            non_proprietary: five_star_non_proprietary_derived_from,
-        },
-    )?;
-
-    Ok(())
+        open_license_derived_from,
+    })
 }
 
 #[cfg(test)]
