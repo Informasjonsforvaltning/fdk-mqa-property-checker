@@ -16,6 +16,104 @@ use crate::{
     vocab::{dcat, dcat_mqa, dcterms, oa},
 };
 
+struct FiveStarInputs {
+    is_open_license: bool,
+    is_format_machine_interpretable: bool,
+    is_format_non_proprietary: bool,
+    is_format_rdf: bool,
+    /// Linked-data resource check not yet implemented.
+    has_linked_resources: bool,
+}
+
+struct FiveStarDerivedFrom {
+    open_license: Option<BlankNode>,
+    machine_interpretable: Option<BlankNode>,
+    non_proprietary: Option<BlankNode>,
+}
+
+fn determine_star_rating(inputs: &FiveStarInputs) -> NamedNodeRef<'static> {
+    if !inputs.is_open_license {
+        return dcat_mqa::ZERO_STARS;
+    }
+    if !inputs.is_format_machine_interpretable {
+        return dcat_mqa::ONE_STAR;
+    }
+    if !inputs.is_format_non_proprietary {
+        return dcat_mqa::TWO_STARS;
+    }
+    if !inputs.is_format_rdf {
+        return dcat_mqa::THREE_STARS;
+    }
+    if inputs.has_linked_resources {
+        dcat_mqa::FIVE_STARS
+    } else {
+        dcat_mqa::FOUR_STARS
+    }
+}
+
+fn attach_five_star_rating(
+    dist_assessment_node: NamedNodeRef<'_>,
+    dist_node: NamedNodeRef<'_>,
+    metrics_store: &Store,
+    inputs: &FiveStarInputs,
+    derived_from: &FiveStarDerivedFrom,
+) -> Result<(), StorageError> {
+    let five_star_quality_annotation = add_five_star_annotation(metrics_store)?;
+    let rating = determine_star_rating(inputs);
+
+    if let Some(derived) = &derived_from.open_license {
+        add_derived_from(
+            five_star_quality_annotation.as_ref().into(),
+            derived.as_ref().into(),
+            metrics_store,
+        )?;
+    }
+
+    if inputs.is_open_license {
+        if let Some(derived) = &derived_from.machine_interpretable {
+            add_derived_from(
+                five_star_quality_annotation.as_ref().into(),
+                derived.as_ref().into(),
+                metrics_store,
+            )?;
+        }
+
+        if inputs.is_format_machine_interpretable {
+            if let Some(derived) = &derived_from.non_proprietary {
+                add_derived_from(
+                    five_star_quality_annotation.as_ref().into(),
+                    derived.as_ref().into(),
+                    metrics_store,
+                )?;
+            }
+        }
+    }
+
+    add_quality_measurement(
+        dcat_mqa::AT_LEAST_FOUR_STARS,
+        dist_assessment_node,
+        dist_node.into(),
+        rating == dcat_mqa::FIVE_STARS || rating == dcat_mqa::FOUR_STARS,
+        metrics_store,
+    )?;
+
+    add_property(
+        five_star_quality_annotation.as_ref().into(),
+        oa::HAS_BODY,
+        rating.into(),
+        metrics_store,
+    )?;
+
+    add_property(
+        five_star_quality_annotation.as_ref().into(),
+        oa::MOTIVATED_BY,
+        oa::CLASSIFYING.into(),
+        metrics_store,
+    )?;
+
+    Ok(())
+}
+
 pub async fn parse_rdf_graph_and_calculate_metrics(
     input_store: &Store,
     output_store: &Store,
@@ -179,14 +277,15 @@ async fn calculate_distribution_metrics(
     let mut five_star_machine_interpretable_derived_from: Option<BlankNode> = None;
     let mut five_star_non_proprietary_derived_from: Option<BlankNode> = None;
 
-    let has_open_license = false;
+    let mut is_open_license = false;
     let mut is_format_aligned = false;
-    let mut is_format_machine_interpretable = false;
-    let mut is_format_non_proprietary = false;
+    // Machine-interpretable and non-proprietary checks not yet implemented.
+    let is_format_machine_interpretable = false;
+    let is_format_non_proprietary = false;
     let mut is_format_rdf = false;
     let mut is_media_type_aligned = false;
-    // Currently not possible to check this!
-    let has_linked_recourses = false;
+    // Linked-data resource check not yet implemented.
+    let has_linked_resources = false;
 
     let has_format_property = has_property(dist_node.into(), dcterms::FORMAT, &store);
     let has_media_type_property = has_property(dist_node.into(), dcat::MEDIA_TYPE, &store);
@@ -217,9 +316,6 @@ async fn calculate_distribution_metrics(
                 }) => is_rdf_format(nn.as_str()),
                 _ => false,
             });
-
-            is_format_machine_interpretable = false;
-            is_format_non_proprietary = false;
 
             five_star_machine_interpretable_derived_from = Some(add_quality_measurement(
                 dcat_mqa::FORMAT_MEDIA_TYPE_MACHINE_INTERPRETABLE,
@@ -274,10 +370,11 @@ async fn calculate_distribution_metrics(
     });
 
     if has_license_property {
-        let is_open_license: bool = futures::stream::iter(licenses)
+        is_open_license = futures::stream::iter(licenses)
             .any(|license| async move {
                 valid_open_license(license.to_string()).await
-            }).await;
+            })
+            .await;
 
         add_quality_measurement(
             dcat_mqa::KNOWN_LICENSE,
@@ -287,7 +384,6 @@ async fn calculate_distribution_metrics(
             &metrics_store,
         )?;
 
-        // TODO
         five_star_open_license_derived_from = Some(add_quality_measurement(
             dcat_mqa::OPEN_LICENSE,
             dist_assessment_node,
@@ -297,82 +393,24 @@ async fn calculate_distribution_metrics(
         )?);
     }
 
-    let five_star_quality_annotation = add_five_star_annotation(&metrics_store)?;
-    let five_star_rating;
+    let five_star_inputs = FiveStarInputs {
+        is_open_license,
+        is_format_machine_interpretable,
+        is_format_non_proprietary,
+        is_format_rdf,
+        has_linked_resources,
+    };
 
-    // 0-Star is derived from the open licence measurement
-    if let Some(derived) = five_star_open_license_derived_from {
-        add_derived_from(
-            five_star_quality_annotation.as_ref().into(),
-            derived.as_ref().into(),
-            &metrics_store,
-        )?;
-    }
-
-    if has_open_license {
-        // 1-Star is derived from the machine-interpretability measurement
-        if let Some(derived) = five_star_machine_interpretable_derived_from {
-            add_derived_from(
-                five_star_quality_annotation.as_ref().into(),
-                derived.as_ref().into(),
-                &metrics_store,
-            )?;
-        }
-
-        if is_format_machine_interpretable {
-            // 2-Star is derived from the non-proprietary measurement
-            if let Some(derived) = five_star_non_proprietary_derived_from {
-                add_derived_from(
-                    five_star_quality_annotation.as_ref().into(),
-                    derived.as_ref().into(),
-                    &metrics_store,
-                )?;
-            }
-
-            if is_format_non_proprietary {
-                if is_format_rdf {
-                    if has_linked_recourses {
-                        // Currently not evaluated
-                        five_star_rating = Some(dcat_mqa::FIVE_STARS);
-                    } else {
-                        five_star_rating = Some(dcat_mqa::FOUR_STARS);
-                    }
-                } else {
-                    five_star_rating = Some(dcat_mqa::THREE_STARS);
-                }
-            } else {
-                five_star_rating = Some(dcat_mqa::TWO_STARS);
-            }
-        } else {
-            five_star_rating = Some(dcat_mqa::ONE_STAR);
-        }
-    } else {
-        five_star_rating = Some(dcat_mqa::ZERO_STARS);
-    }
-
-    add_quality_measurement(
-        dcat_mqa::AT_LEAST_FOUR_STARS,
+    attach_five_star_rating(
         dist_assessment_node,
-        dist_node.into(),
-        five_star_rating == Some(dcat_mqa::FIVE_STARS)
-            || five_star_rating == Some(dcat_mqa::FOUR_STARS),
+        dist_node,
         &metrics_store,
-    )?;
-
-    if let Some(rating) = five_star_rating {
-        add_property(
-            five_star_quality_annotation.as_ref().into(),
-            oa::HAS_BODY,
-            rating.into(),
-            &metrics_store,
-        )?;
-    }
-
-    add_property(
-        five_star_quality_annotation.as_ref().into(),
-        oa::MOTIVATED_BY,
-        oa::CLASSIFYING.into(),
-        &metrics_store,
+        &five_star_inputs,
+        &FiveStarDerivedFrom {
+            open_license: five_star_open_license_derived_from,
+            machine_interpretable: five_star_machine_interpretable_derived_from,
+            non_proprietary: five_star_non_proprietary_derived_from,
+        },
     )?;
 
     Ok(())
@@ -386,6 +424,75 @@ mod tests {
     use oxigraph::model::{vocab, Literal, NamedOrBlankNode};
     use std::env;
     use tokio::runtime::Runtime;
+
+    #[test]
+    fn test_determine_star_rating() {
+        assert_eq!(
+            determine_star_rating(&FiveStarInputs {
+                is_open_license: false,
+                is_format_machine_interpretable: false,
+                is_format_non_proprietary: false,
+                is_format_rdf: false,
+                has_linked_resources: false,
+            }),
+            dcat_mqa::ZERO_STARS
+        );
+
+        assert_eq!(
+            determine_star_rating(&FiveStarInputs {
+                is_open_license: true,
+                is_format_machine_interpretable: false,
+                is_format_non_proprietary: false,
+                is_format_rdf: false,
+                has_linked_resources: false,
+            }),
+            dcat_mqa::ONE_STAR
+        );
+
+        assert_eq!(
+            determine_star_rating(&FiveStarInputs {
+                is_open_license: true,
+                is_format_machine_interpretable: true,
+                is_format_non_proprietary: false,
+                is_format_rdf: false,
+                has_linked_resources: false,
+            }),
+            dcat_mqa::TWO_STARS
+        );
+
+        assert_eq!(
+            determine_star_rating(&FiveStarInputs {
+                is_open_license: true,
+                is_format_machine_interpretable: true,
+                is_format_non_proprietary: true,
+                is_format_rdf: false,
+                has_linked_resources: false,
+            }),
+            dcat_mqa::THREE_STARS
+        );
+
+        assert_eq!(
+            determine_star_rating(&FiveStarInputs {
+                is_open_license: true,
+                is_format_machine_interpretable: true,
+                is_format_non_proprietary: true,
+                is_format_rdf: true,
+                has_linked_resources: false,
+            }),
+            dcat_mqa::FOUR_STARS
+        );
+
+        assert_eq!(
+            determine_star_rating(&FiveStarInputs {
+                is_open_license: true,
+                is_format_machine_interpretable: true,
+                is_format_non_proprietary: true,
+                is_format_rdf: true,
+                has_linked_resources: true,
+            }),
+            dcat_mqa::FIVE_STARS
+        );
+    }
 
     #[test]
     fn test_parse_graph_anc_collect_metrics() {
