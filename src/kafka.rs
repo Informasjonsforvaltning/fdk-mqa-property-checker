@@ -1,6 +1,6 @@
 use std::{
+    env, format,
     time::{Duration, Instant},
-    {env, format},
 };
 
 use apache_avro::schema::Name;
@@ -29,8 +29,13 @@ use crate::{
     error::Error,
     metrics::parse_rdf_graph_and_calculate_metrics,
     prometheus_metrics::{PROCESSED_MESSAGES, PROCESSING_TIME},
-    schemas::{DatasetEvent, DatasetEventType, InputEvent, MQAEventType, MqaEvent},
+    schemas::{
+        DatasetEvent, DatasetEventType, InputEvent, MQAEventType, MqaEvent, DATASET_EVENT_NAME,
+        DATASET_EVENT_NAMESPACE, MQA_EVENT_SCHEMA,
+    },
 };
+
+const SCHEMA_REGISTRY_TIMEOUT_SECS: u64 = 30;
 
 lazy_static! {
     pub static ref BROKERS: String = env::var("BROKERS").unwrap_or("localhost:9092".to_string());
@@ -52,7 +57,7 @@ pub fn create_sr_settings() -> Result<SrSettings, Error> {
     });
 
     let sr_settings = sr_settings_builder
-        .set_timeout(Duration::from_secs(30))
+        .set_timeout(Duration::from_secs(SCHEMA_REGISTRY_TIMEOUT_SECS))
         .build()?;
     Ok(sr_settings)
 }
@@ -112,7 +117,7 @@ pub async fn run_async_processor(worker_id: usize, sr_settings: SrSettings) -> R
             timestamp = message.timestamp().to_millis(),
         );
 
-        receive_message(
+        process_kafka_message(
             &consumer,
             &producer,
             &mut decoder,
@@ -126,7 +131,7 @@ pub async fn run_async_processor(worker_id: usize, sr_settings: SrSettings) -> R
     }
 }
 
-async fn receive_message(
+async fn process_kafka_message(
     consumer: &StreamConsumer,
     producer: &FutureProducer,
     decoder: &mut AvroDecoder<'_>,
@@ -192,7 +197,7 @@ pub async fn handle_message(
             let encoded = encoder
                 .encode_struct(
                     mqa_event,
-                    &SubjectNameStrategy::RecordNameStrategy("no.fdk.mqa.MQAEvent".to_string()),
+                    &SubjectNameStrategy::RecordNameStrategy(MQA_EVENT_SCHEMA.to_string()),
                 )
                 .await?;
 
@@ -226,7 +231,7 @@ async fn decode_message(
             value,
         } => {
             let event = match (namespace.as_str(), name.as_str()) {
-                ("no.fdk.mqa", "DatasetEvent") => {
+                (DATASET_EVENT_NAMESPACE, DATASET_EVENT_NAME) => {
                     InputEvent::DatasetEvent(apache_avro::from_value::<DatasetEvent>(&value)?)
                 }
                 _ => InputEvent::Unknown { namespace, name },

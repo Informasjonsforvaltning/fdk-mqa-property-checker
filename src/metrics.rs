@@ -1,8 +1,3 @@
-use futures::StreamExt;
-use oxigraph::{
-    model::{BlankNode, NamedNodeRef, Quad, Term},
-    store::Store,
-};
 use crate::{
     error::Error,
     rdf::{
@@ -12,8 +7,13 @@ use crate::{
         list_access_right_uris, list_distributions, list_format_uris, list_license_uris,
         list_media_type_uris, node_assessment, parse_turtle,
     },
-    reference_data::{valid_file_type, valid_media_type, valid_open_license, valid_access_right},
+    reference_data::{valid_access_right, valid_file_type, valid_media_type, valid_open_license},
     vocab::{dcat, dcat_mqa, dcterms, oa},
+};
+use futures::StreamExt;
+use oxigraph::{
+    model::{BlankNode, NamedNodeRef, Quad, Term},
+    store::Store,
 };
 
 struct AvailabilityCheck {
@@ -314,7 +314,8 @@ async fn calculate_metrics(
             distribution.as_ref(),
             input_store,
             output_store,
-        ).await?;
+        )
+        .await?;
     }
 
     match get_five_star_annotation(output_store) {
@@ -346,9 +347,13 @@ async fn calculate_distribution_metrics(
         metrics_store,
     )?;
 
-    let format_result =
-        check_format_and_media_type_alignment(dist_assessment_node, dist_node, store, metrics_store)
-            .await?;
+    let format_result = check_format_and_media_type_alignment(
+        dist_assessment_node,
+        dist_node,
+        store,
+        metrics_store,
+    )
+    .await?;
     let license_result =
         check_license_metrics(dist_assessment_node, dist_node, store, metrics_store).await?;
 
@@ -392,9 +397,11 @@ async fn check_format_and_media_type_alignment(
     let has_media_type_property = has_property(dist_node.into(), dcat::MEDIA_TYPE, store);
 
     if has_format_property {
-        is_format_aligned =
-            any_valid_in_reference_data(list_format_uris(dist_node, store), valid_format_or_media_type)
-                .await;
+        is_format_aligned = any_valid_in_reference_data(
+            list_format_uris(dist_node, store),
+            valid_format_or_media_type,
+        )
+        .await;
 
         if is_format_aligned {
             is_format_rdf = formats_include_rdf(dist_node, store);
@@ -486,9 +493,148 @@ mod tests {
     use crate::vocab::{dcat_mqa, dqv};
 
     use super::*;
-    use oxigraph::model::{vocab, Literal, NamedOrBlankNode};
+    use oxigraph::model::{vocab, Literal, NamedNodeRef, NamedOrBlankNode};
     use std::env;
     use tokio::runtime::Runtime;
+
+    fn boolean_literal(expected: bool) -> Term {
+        Term::Literal(Literal::new_typed_literal(
+            if expected { "true" } else { "false" },
+            NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
+        ))
+    }
+
+    fn set_reference_data_base_url(server: &httpmock::MockServer) {
+        env::set_var(
+            "REFERENCE_DATA_BASE_URL",
+            format!("http://{}", server.address()),
+        );
+    }
+
+    fn setup_reference_data_mock() -> httpmock::MockServer {
+        let server = httpmock::MockServer::start();
+
+        server.mock(|when, then| {
+            when.path("/reference-data/iana/media-types");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "mediaTypes": [
+                            {"uri":"https://www.iana.org/assignments/media-types/text/csv","name":"csv","type":"text","subType":"csv"},
+                            {"uri":"https://www.iana.org/assignments/media-types/text/csv-schema","name":"csv-schema","type":"text","subType":"csv-schema"}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        server.mock(|when, then| {
+            when.path("/reference-data/eu/file-types");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "fileTypes": [
+                            {"uri":"http://publications.europa.eu/resource/authority/file-type/7Z","code":"7Z","mediaType":"application/x-7z-compressed"}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        server.mock(|when, then| {
+            when.path("/reference-data/open-licenses");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "openLicenses":[
+                            {"uri":"http://creativecommons.org/licenses/by/4.0/","code":"CC BY 4.0","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/licenses/by/4.0/deed.no","code":"CC BY 4.0 DEED","isReplacedBy":"http://creativecommons.org/licenses/by/4.0/","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/publicdomain/zero/1.0/","code":"CC0 1.0","label":{"no":"Creative Commons Universal Fristatus-erklæring","en":"Creative Commons Universal Public Domain Dedication"}},{"uri":"http://data.norge.no/nlod/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/1.0","code":"NLOD10","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/2.0","code":"NLOD20","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://publications.europa.eu/resource/authority/licence/NLOD_2_0","code":"NLOD_2_0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        server.mock(|when, then| {
+            when.path("/reference-data/eu/access-rights");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "accessRights":[
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/CONFIDENTIAL","code":"CONFIDENTIAL","label":{"en":"confidential"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/NON_PUBLIC","code":"NON_PUBLIC","label":{"en":"non-public"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/NORMAL","code":"NORMAL","label":{"en":"normal"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/RESTRICTED","code":"RESTRICTED","label":{"en":"restricted"}},
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/SENSITIVE","code":"SENSITIVE","label":{"en":"sensitive"}}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        server
+    }
+
+    fn setup_access_rights_mock() -> httpmock::MockServer {
+        let server = httpmock::MockServer::start();
+
+        server.mock(|when, then| {
+            when.path("/reference-data/eu/access-rights");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"
+                    {
+                        "accessRights":[
+                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}}
+                        ]
+                    }
+                "#,
+                );
+        });
+
+        server
+    }
+
+    fn run_metrics_on_ttl(input: &str) -> String {
+        Runtime::new()
+            .unwrap()
+            .block_on(parse_rdf_graph_and_calculate_metrics(
+                &Store::new().unwrap(),
+                &Store::new().unwrap(),
+                input.to_string(),
+            ))
+            .unwrap()
+    }
+
+    fn assert_measurement_value(store: &Store, metric: NamedNodeRef, expected: bool) {
+        let measurement = store
+            .quads_for_pattern(None, None, Some(metric.into()), None)
+            .next()
+            .unwrap_or_else(|| panic!("Measurement not found for {}", metric.as_str()))
+            .unwrap();
+
+        let value_quad = store
+            .quads_for_pattern(
+                Some(measurement.subject.as_ref()),
+                Some(dqv::VALUE.into()),
+                None,
+                None,
+            )
+            .next()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(value_quad.object, boolean_literal(expected));
+    }
 
     #[test]
     fn test_determine_star_rating() {
@@ -560,88 +706,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_graph_anc_collect_metrics() {
-        let server = httpmock::MockServer::start();
+    fn test_parse_graph_and_collect_metrics() {
+        let server = setup_reference_data_mock();
+        set_reference_data_base_url(&server);
 
-        server.mock(|when, then| {
-            when.path("/reference-data/iana/media-types");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(
-                    r#"
-                    {
-                        "mediaTypes": [
-                            {"uri":"https://www.iana.org/assignments/media-types/text/csv","name":"csv","type":"text","subType":"csv"},
-                            {"uri":"https://www.iana.org/assignments/media-types/text/csv-schema","name":"csv-schema","type":"text","subType":"csv-schema"}
-                        ]
-                    }
-                "#,
-                );
-        });
-
-        server.mock(|when, then| {
-            when.path("/reference-data/eu/file-types");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(
-                    r#"
-                    {
-                        "fileTypes": [
-                            {"uri":"http://publications.europa.eu/resource/authority/file-type/7Z","code":"7Z","mediaType":"application/x-7z-compressed"}
-                        ]
-                    }
-                "#,
-                );
-        });
-
-        server.mock(|when, then| {
-            when.path("/reference-data/open-licenses");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(
-                    r#"
-                    {
-                        "openLicenses":[
-                            {"uri":"http://creativecommons.org/licenses/by/4.0/","code":"CC BY 4.0","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/licenses/by/4.0/deed.no","code":"CC BY 4.0 DEED","isReplacedBy":"http://creativecommons.org/licenses/by/4.0/","label":{"no":"Creative Commons Navngivelse 4.0 Internasjonal","en":"Creative Commons Attribution 4.0 International"}},{"uri":"http://creativecommons.org/publicdomain/zero/1.0/","code":"CC0 1.0","label":{"no":"Creative Commons Universal Fristatus-erklæring","en":"Creative Commons Universal Public Domain Dedication"}},{"uri":"http://data.norge.no/nlod/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/","code":"NLOD","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/1.0","code":"NLOD10","isReplacedBy":"http://data.norge.no/nlod/no/2.0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://data.norge.no/nlod/no/2.0","code":"NLOD20","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}},{"uri":"http://publications.europa.eu/resource/authority/licence/NLOD_2_0","code":"NLOD_2_0","label":{"no":"Norsk lisens for offentlige data","en":"Norwegian Licence for Open Government Data"}}
-                        ]
-                    }
-                "#,
-                );
-        });
-
-        server.mock(|when, then| {
-            when.path("/reference-data/eu/access-rights");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(
-                    r#"
-                    {
-                        "accessRights":[
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/CONFIDENTIAL","code":"CONFIDENTIAL","label":{"en":"confidential"}},
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/NON_PUBLIC","code":"NON_PUBLIC","label":{"en":"non-public"}},
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/NORMAL","code":"NORMAL","label":{"en":"normal"}},
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}},
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/RESTRICTED","code":"RESTRICTED","label":{"en":"restricted"}},
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/SENSITIVE","code":"SENSITIVE","label":{"en":"sensitive"}}
-                        ]
-                    }
-                "#,
-                );
-        });
-
-        env::set_var(
-            "REFERENCE_DATA_BASE_URL",
-            format!("http://{}", server.address()),
-        );
-
-        let mqa_graph = Runtime::new().unwrap().block_on(
-            parse_rdf_graph_and_calculate_metrics(
-                &mut Store::new().unwrap(),
-                &mut Store::new().unwrap(),
-                include_str!("../tests/data/dataset_event.ttl").to_string(),
-            )
-        )
-        .unwrap();
+        let mqa_graph = run_metrics_on_ttl(include_str!("../tests/data/dataset_event.ttl"));
 
         let store_expected = Store::new().unwrap();
         parse_turtle(
@@ -726,63 +795,18 @@ mod tests {
                     .count()
             );
 
-            let known_license_assessment = store_actual
-                .quads_for_pattern(None, None, Some(dcat_mqa::KNOWN_LICENSE.into()), None)
-                .next()
-                .unwrap()
-                .unwrap()
-                .subject;
-
-            let known_license_value = store_actual
-                .quads_for_pattern(
-                    Some(known_license_assessment.as_ref()),
-                    Some(dqv::VALUE),
-                    None,
-                    None,
-                )
-                .next()
-                .unwrap()
-                .unwrap();
-
-            assert_eq!(
-                known_license_value.object,
-                Term::Literal(Literal::new_typed_literal(
-                    "true",
-                    NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
-                ))
-            );
+            assert_measurement_value(&store_actual, dcat_mqa::KNOWN_LICENSE, true);
         } else {
             panic!("Distribution assessment is not a named node")
         };
 
-        // Clean up environment variable
         env::remove_var("REFERENCE_DATA_BASE_URL");
     }
 
     #[test]
     fn test_access_rights_vocabulary_alignment_valid() {
-        let server = httpmock::MockServer::start();
-
-        // Mock access rights endpoint
-        server.mock(|when, then| {
-            when.path("/reference-data/eu/access-rights");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(
-                    r#"
-                    {
-                        "accessRights":[
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}}
-                        ]
-                    }
-                "#,
-                );
-        });
-
-        env::set_var(
-            "REFERENCE_DATA_BASE_URL",
-            format!("http://{}", server.address()),
-        );
+        let server = setup_access_rights_mock();
+        set_reference_data_base_url(&server);
 
         let input_ttl = r#"
 @prefix dcat: <http://www.w3.org/ns/dcat#> .
@@ -795,77 +819,20 @@ mod tests {
     dct:accessRights <http://publications.europa.eu/resource/authority/access-right/PUBLIC> .
 "#;
 
-        let mqa_graph = Runtime::new().unwrap().block_on(
-            parse_rdf_graph_and_calculate_metrics(
-                &mut Store::new().unwrap(),
-                &mut Store::new().unwrap(),
-                input_ttl.to_string(),
-            )
-        )
-        .unwrap();
+        let mqa_graph = run_metrics_on_ttl(input_ttl);
 
         let store = Store::new().unwrap();
         parse_turtle(&store, mqa_graph).unwrap();
 
-        // Check that access rights vocabulary alignment is true
-        let access_rights_measurement = store
-            .quads_for_pattern(
-                None,
-                None,
-                Some(dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT.into()),
-                None,
-            )
-            .next()
-            .expect("Access rights vocabulary alignment measurement not found")
-            .unwrap();
+        assert_measurement_value(&store, dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT, true);
 
-        let value_quad = store
-            .quads_for_pattern(
-                Some(access_rights_measurement.subject.as_ref()),
-                Some(dqv::VALUE.into()),
-                None,
-                None,
-            )
-            .next()
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            value_quad.object,
-            Term::Literal(Literal::new_typed_literal(
-                "true",
-                NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
-            ))
-        );
-
-        // Clean up environment variable
         env::remove_var("REFERENCE_DATA_BASE_URL");
     }
 
     #[test]
     fn test_access_rights_vocabulary_alignment_invalid() {
-        let server = httpmock::MockServer::start();
-
-        // Mock access rights endpoint
-        server.mock(|when, then| {
-            when.path("/reference-data/eu/access-rights");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(
-                    r#"
-                    {
-                        "accessRights":[
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}}
-                        ]
-                    }
-                "#,
-                );
-        });
-
-        env::set_var(
-            "REFERENCE_DATA_BASE_URL",
-            format!("http://{}", server.address()),
-        );
+        let server = setup_access_rights_mock();
+        set_reference_data_base_url(&server);
 
         let input_ttl = r#"
 @prefix dcat: <http://www.w3.org/ns/dcat#> .
@@ -878,77 +845,20 @@ mod tests {
     dct:accessRights <http://example.com/invalid-access-right> .
 "#;
 
-        let mqa_graph = Runtime::new().unwrap().block_on(
-            parse_rdf_graph_and_calculate_metrics(
-                &mut Store::new().unwrap(),
-                &mut Store::new().unwrap(),
-                input_ttl.to_string(),
-            )
-        )
-        .unwrap();
+        let mqa_graph = run_metrics_on_ttl(input_ttl);
 
         let store = Store::new().unwrap();
         parse_turtle(&store, mqa_graph).unwrap();
 
-        // Check that access rights vocabulary alignment is false
-        let access_rights_measurement = store
-            .quads_for_pattern(
-                None,
-                None,
-                Some(dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT.into()),
-                None,
-            )
-            .next()
-            .expect("Access rights vocabulary alignment measurement not found")
-            .unwrap();
+        assert_measurement_value(&store, dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT, false);
 
-        let value_quad = store
-            .quads_for_pattern(
-                Some(access_rights_measurement.subject.as_ref()),
-                Some(dqv::VALUE.into()),
-                None,
-                None,
-            )
-            .next()
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            value_quad.object,
-            Term::Literal(Literal::new_typed_literal(
-                "false",
-                NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
-            ))
-        );
-
-        // Clean up environment variable
         env::remove_var("REFERENCE_DATA_BASE_URL");
     }
 
     #[test]
     fn test_access_rights_vocabulary_alignment_no_access_rights() {
-        let server = httpmock::MockServer::start();
-
-        // Mock access rights endpoint
-        server.mock(|when, then| {
-            when.path("/reference-data/eu/access-rights");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(
-                    r#"
-                    {
-                        "accessRights":[
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}}
-                        ]
-                    }
-                "#,
-                );
-        });
-
-        env::set_var(
-            "REFERENCE_DATA_BASE_URL",
-            format!("http://{}", server.address()),
-        );
+        let server = setup_access_rights_mock();
+        set_reference_data_base_url(&server);
 
         let input_ttl = r#"
 @prefix dcat: <http://www.w3.org/ns/dcat#> .
@@ -959,50 +869,13 @@ mod tests {
     dcatnomqa:hasAssessment <http://dataset.assessment.no> .
 "#;
 
-        let mqa_graph = Runtime::new().unwrap().block_on(
-            parse_rdf_graph_and_calculate_metrics(
-                &mut Store::new().unwrap(),
-                &mut Store::new().unwrap(),
-                input_ttl.to_string(),
-            )
-        )
-        .unwrap();
+        let mqa_graph = run_metrics_on_ttl(input_ttl);
 
         let store = Store::new().unwrap();
         parse_turtle(&store, mqa_graph).unwrap();
 
-        // Check that access rights vocabulary alignment is false when no access rights property exists
-        let access_rights_measurement = store
-            .quads_for_pattern(
-                None,
-                None,
-                Some(dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT.into()),
-                None,
-            )
-            .next()
-            .expect("Access rights vocabulary alignment measurement not found")
-            .unwrap();
+        assert_measurement_value(&store, dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT, false);
 
-        let value_quad = store
-            .quads_for_pattern(
-                Some(access_rights_measurement.subject.as_ref()),
-                Some(dqv::VALUE.into()),
-                None,
-                None,
-            )
-            .next()
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            value_quad.object,
-            Term::Literal(Literal::new_typed_literal(
-                "false",
-                NamedNodeRef::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean")
-            ))
-        );
-
-        // Clean up environment variable
         env::remove_var("REFERENCE_DATA_BASE_URL");
     }
 }

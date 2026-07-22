@@ -10,8 +10,8 @@ const REFERENCE_DATA_CACHE_TTL_SECS: u64 = 86400;
 const _: () = assert!(REFERENCE_DATA_CACHE_TTL_SECS == 86400);
 
 lazy_static! {
-    pub static ref REFERENCE_DATA_BASE_URL: String = env::var("REFERENCE_DATA_BASE_URL")
-        .unwrap_or("https://data.norge.no".to_string());
+    pub static ref REFERENCE_DATA_BASE_URL: String =
+        env::var("REFERENCE_DATA_BASE_URL").unwrap_or("https://data.norge.no".to_string());
     pub static ref REFERENCE_DATA_API_KEY: String =
         env::var("REFERENCE_DATA_API_KEY").unwrap_or("".to_string());
 }
@@ -154,7 +154,11 @@ fn items_to_map<T: ReferenceDataItem>(items: Vec<T>) -> HashMap<String, T> {
         .collect()
 }
 
-async fn fetch_reference_data<C, T, F>(path: &str, label: &str, extract: F) -> Option<HashMap<String, T>>
+async fn fetch_reference_data<C, T, F>(
+    path: &str,
+    label: &str,
+    extract: F,
+) -> Option<HashMap<String, T>>
 where
     C: DeserializeOwned,
     T: ReferenceDataItem,

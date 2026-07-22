@@ -6,6 +6,11 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::error::Error;
 
+pub const DATASET_EVENT_NAMESPACE: &str = "no.fdk.mqa";
+pub const DATASET_EVENT_NAME: &str = "DatasetEvent";
+pub const DATASET_EVENT_SCHEMA: &str = "no.fdk.mqa.DatasetEvent";
+pub const MQA_EVENT_SCHEMA: &str = "no.fdk.mqa.MQAEvent";
+
 pub enum InputEvent {
     DatasetEvent(DatasetEvent),
     Unknown { namespace: String, name: String },
@@ -29,6 +34,7 @@ pub struct DatasetEvent {
     pub timestamp: i64,
 }
 
+// Rust struct uses idiomatic `MqaEvent`; Avro schema registry name is `MQAEvent`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MqaEvent {
     #[serde(rename = "type")]
@@ -47,7 +53,7 @@ pub enum MQAEventType {
 pub async fn setup_schemas(sr_settings: &SrSettings) -> Result<(), Error> {
     register_schema(
         sr_settings,
-        "no.fdk.mqa.MQAEvent",
+        MQA_EVENT_SCHEMA,
         r#"{
             "name": "MQAEvent",
             "namespace": "no.fdk.mqa",
@@ -97,6 +103,6 @@ pub async fn register_schema(
     )
     .await?;
 
-    tracing::info!(id = schema.id, name, "schema succesfully registered");
+    tracing::info!(id = schema.id, name, "schema successfully registered");
     Ok(())
 }

@@ -10,6 +10,9 @@ use fdk_mqa_property_checker::{
     schemas::setup_schemas,
 };
 
+const METRICS_PORT: u16 = 8080;
+const NUM_KAFKA_WORKERS: usize = 4;
+
 #[get("/ping")]
 async fn ping() -> impl Responder {
     "pong"
@@ -39,7 +42,7 @@ async fn main() {
         .with_target(false)
         .with_current_span(false)
         .init();
-    
+
     tracing::debug!("Tracing initialized");
 
     register_metrics();
@@ -64,7 +67,7 @@ async fn main() {
 
     let http_server = tokio::spawn(
         HttpServer::new(|| App::new().service(ping).service(ready).service(metrics))
-            .bind(("0.0.0.0", 8080))
+            .bind(("0.0.0.0", METRICS_PORT))
             .unwrap_or_else(|e| {
                 tracing::error!(error = e.to_string(), "metrics server error");
                 std::process::exit(1);
@@ -73,7 +76,7 @@ async fn main() {
             .map(|f| f.map_err(|e| e.into())),
     );
 
-    (0..4)
+    (0..NUM_KAFKA_WORKERS)
         .map(|i| tokio::spawn(run_async_processor(i, sr_settings.clone())))
         .chain(std::iter::once(http_server))
         .collect::<FuturesUnordered<_>>()

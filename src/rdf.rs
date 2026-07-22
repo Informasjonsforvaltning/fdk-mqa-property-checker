@@ -12,7 +12,7 @@ pub fn parse_turtle(store: &Store, turtle: String) -> Result<(), Error> {
         RdfParser::from_format(RdfFormat::Turtle)
             .without_named_graphs()
             .with_default_graph(GraphNameRef::DefaultGraph),
-        turtle.to_string().as_bytes().as_ref()
+        turtle.to_string().as_bytes().as_ref(),
     )?;
     Ok(())
 }
@@ -78,7 +78,9 @@ pub fn list_access_rights<'a>(dataset: NamedNodeRef<'a>, store: &'a Store) -> Qu
 }
 
 /// Collect URI strings from named-node objects in a quad iterator.
-pub fn collect_named_node_uris(iter: impl Iterator<Item = Result<Quad, StorageError>>) -> Vec<String> {
+pub fn collect_named_node_uris(
+    iter: impl Iterator<Item = Result<Quad, StorageError>>,
+) -> Vec<String> {
     iter.filter_map(|quad| match quad {
         Ok(Quad {
             object: Term::NamedNode(nn),
