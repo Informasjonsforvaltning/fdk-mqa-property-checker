@@ -77,6 +77,44 @@ pub fn list_access_rights<'a>(dataset: NamedNodeRef<'a>, store: &'a Store) -> Qu
     )
 }
 
+/// Collect URI strings from named-node objects in a quad iterator.
+pub fn collect_named_node_uris(iter: impl Iterator<Item = Result<Quad, StorageError>>) -> Vec<String> {
+    iter.filter_map(|quad| match quad {
+        Ok(Quad {
+            object: Term::NamedNode(nn),
+            ..
+        }) => Some(nn.as_str().to_string()),
+        _ => None,
+    })
+    .collect()
+}
+
+pub fn list_format_uris<'a>(distribution: NamedNodeRef<'a>, store: &'a Store) -> Vec<String> {
+    collect_named_node_uris(list_formats(distribution, store))
+}
+
+pub fn list_media_type_uris<'a>(distribution: NamedNodeRef<'a>, store: &'a Store) -> Vec<String> {
+    collect_named_node_uris(list_media_types(distribution, store))
+}
+
+pub fn list_license_uris<'a>(distribution: NamedNodeRef<'a>, store: &'a Store) -> Vec<String> {
+    collect_named_node_uris(list_licenses(distribution, store))
+}
+
+pub fn list_access_right_uris<'a>(dataset: NamedNodeRef<'a>, store: &'a Store) -> Vec<String> {
+    collect_named_node_uris(list_access_rights(dataset, store))
+}
+
+pub fn formats_include_rdf<'a>(distribution: NamedNodeRef<'a>, store: &'a Store) -> bool {
+    list_formats(distribution, store).any(|quad| match quad {
+        Ok(Quad {
+            object: Term::NamedNode(nn),
+            ..
+        }) => is_rdf_format(nn.as_str()),
+        _ => false,
+    })
+}
+
 /// Retrieve dataset namednode
 pub fn get_dataset_node(store: &Store) -> Option<NamedNode> {
     list_datasets(&store).next().and_then(|d| match d {

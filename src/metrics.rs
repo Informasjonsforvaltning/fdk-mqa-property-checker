@@ -7,14 +7,130 @@ use crate::{
     error::Error,
     rdf::{
         add_derived_from, add_five_star_annotation, add_property, add_quality_measurement,
-        dump_graph_as_turtle, get_dataset_node, get_five_star_annotation, has_property,
-        insert_dataset_assessment, insert_distribution_assessment, is_rdf_format,
-        list_access_rights, list_distributions, list_formats, list_licenses, list_media_types, node_assessment,
-        parse_turtle,
+        dump_graph_as_turtle, formats_include_rdf, get_dataset_node, get_five_star_annotation,
+        has_property, insert_dataset_assessment, insert_distribution_assessment,
+        list_access_right_uris, list_distributions, list_format_uris, list_license_uris,
+        list_media_type_uris, node_assessment, parse_turtle,
     },
     reference_data::{valid_file_type, valid_media_type, valid_open_license, valid_access_right},
     vocab::{dcat, dcat_mqa, dcterms, oa},
 };
+
+struct AvailabilityCheck {
+    metric: NamedNodeRef<'static>,
+    properties: &'static [NamedNodeRef<'static>],
+}
+
+const DATASET_AVAILABILITY_CHECKS: &[AvailabilityCheck] = &[
+    AvailabilityCheck {
+        metric: dcat_mqa::ACCESS_RIGHTS_AVAILABILITY,
+        properties: &[dcterms::ACCESS_RIGHTS],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::CATEGORY_AVAILABILITY,
+        properties: &[dcat::THEME],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::CONTACT_POINT_AVAILABILITY,
+        properties: &[dcat::CONTACT_POINT],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::KEYWORD_AVAILABILITY,
+        properties: &[dcat::KEYWORD, dcterms::SUBJECT],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::PUBLISHER_AVAILABILITY,
+        properties: &[dcterms::PUBLISHER],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::SPATIAL_AVAILABILITY,
+        properties: &[dcterms::SPATIAL],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::TEMPORAL_AVAILABILITY,
+        properties: &[dcterms::TEMPORAL],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::DATE_ISSUED_AVAILABILITY,
+        properties: &[dcterms::ISSUED],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::DATE_MODIFIED_AVAILABILITY,
+        properties: &[dcterms::MODIFIED],
+    },
+];
+
+const DISTRIBUTION_AVAILABILITY_CHECKS: &[AvailabilityCheck] = &[
+    AvailabilityCheck {
+        metric: dcat_mqa::BYTE_SIZE_AVAILABILITY,
+        properties: &[dcat::BYTE_SIZE],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::DATE_ISSUED_AVAILABILITY,
+        properties: &[dcterms::ISSUED],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::DATE_MODIFIED_AVAILABILITY,
+        properties: &[dcterms::MODIFIED],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::DOWNLOAD_URL_AVAILABILITY,
+        properties: &[dcat::DOWNLOAD_URL],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::RIGHTS_AVAILABILITY,
+        properties: &[dcterms::RIGHTS],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::FORMAT_AVAILABILITY,
+        properties: &[dcterms::FORMAT],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::LICENSE_AVAILABILITY,
+        properties: &[dcterms::LICENSE],
+    },
+    AvailabilityCheck {
+        metric: dcat_mqa::MEDIA_TYPE_AVAILABILITY,
+        properties: &[dcat::MEDIA_TYPE],
+    },
+];
+
+async fn any_valid_in_reference_data<F, Fut>(items: Vec<String>, validator: F) -> bool
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    futures::stream::iter(items)
+        .any(|item| async { validator(item).await })
+        .await
+}
+
+async fn valid_format_or_media_type(value: String) -> bool {
+    valid_file_type(value.clone()).await || valid_media_type(value).await
+}
+
+fn add_availability_measurements(
+    checks: &[AvailabilityCheck],
+    assessment_node: NamedNodeRef<'_>,
+    subject_node: NamedNodeRef<'_>,
+    store: &Store,
+    output_store: &Store,
+) -> Result<(), Error> {
+    for check in checks {
+        add_quality_measurement(
+            check.metric,
+            assessment_node,
+            subject_node.into(),
+            check
+                .properties
+                .iter()
+                .any(|property| has_property(subject_node.into(), *property, store)),
+            output_store,
+        )?;
+    }
+
+    Ok(())
+}
 
 struct FiveStarInputs {
     is_open_license: bool,
@@ -150,56 +266,19 @@ async fn calculate_metrics(
 
     insert_dataset_assessment(dataset_assessment.as_ref(), dataset_node, &output_store)?;
 
-    for (metric, props) in vec![
-        (
-            dcat_mqa::ACCESS_RIGHTS_AVAILABILITY,
-            vec![dcterms::ACCESS_RIGHTS],
-        ),
-        (dcat_mqa::CATEGORY_AVAILABILITY, vec![dcat::THEME]),
-        (
-            dcat_mqa::CONTACT_POINT_AVAILABILITY,
-            vec![dcat::CONTACT_POINT],
-        ),
-        (
-            dcat_mqa::KEYWORD_AVAILABILITY,
-            vec![dcat::KEYWORD, dcterms::SUBJECT],
-        ),
-        (dcat_mqa::PUBLISHER_AVAILABILITY, vec![dcterms::PUBLISHER]),
-        (dcat_mqa::SPATIAL_AVAILABILITY, vec![dcterms::SPATIAL]),
-        (dcat_mqa::TEMPORAL_AVAILABILITY, vec![dcterms::TEMPORAL]),
-        (dcat_mqa::DATE_ISSUED_AVAILABILITY, vec![dcterms::ISSUED]),
-        (
-            dcat_mqa::DATE_MODIFIED_AVAILABILITY,
-            vec![dcterms::MODIFIED],
-        ),
-    ] {
-        add_quality_measurement(
-            metric,
-            dataset_assessment.as_ref(),
-            dataset_node.into(),
-            props
-                .into_iter()
-                .any(|p| has_property(dataset_node.into(), p, input_store)),
-            &output_store,
-        )?;
-    }
+    add_availability_measurements(
+        DATASET_AVAILABILITY_CHECKS,
+        dataset_assessment.as_ref(),
+        dataset_node,
+        input_store,
+        output_store,
+    )?;
 
-    // Check if access rights align with controlled vocabulary
-    let mut access_rights: Vec<String> = Vec::new();
-    list_access_rights(dataset_node, input_store).for_each(|ar| match ar {
-        Ok(Quad {
-               object: Term::NamedNode(nn),
-               ..
-           }) => access_rights.push(nn.as_str().to_string()),
-        _ => {},
-    });
-
-    let has_access_rights_property = has_property(dataset_node.into(), dcterms::ACCESS_RIGHTS, input_store);
+    let access_rights = list_access_right_uris(dataset_node, input_store);
+    let has_access_rights_property =
+        has_property(dataset_node.into(), dcterms::ACCESS_RIGHTS, input_store);
     let is_access_rights_aligned = if has_access_rights_property {
-        futures::stream::iter(access_rights)
-            .any(|access_right| async move {
-                valid_access_right(access_right.to_string()).await
-            }).await
+        any_valid_in_reference_data(access_rights, valid_access_right).await
     } else {
         false
     };
@@ -259,7 +338,8 @@ async fn calculate_distribution_metrics(
     store: &Store,
     metrics_store: &Store,
 ) -> Result<(), Error> {
-    add_distribution_availability_measurements(
+    add_availability_measurements(
+        DISTRIBUTION_AVAILABILITY_CHECKS,
         dist_assessment_node,
         dist_node,
         store,
@@ -293,42 +373,6 @@ async fn calculate_distribution_metrics(
     Ok(())
 }
 
-fn add_distribution_availability_measurements(
-    dist_assessment_node: NamedNodeRef<'_>,
-    dist_node: NamedNodeRef<'_>,
-    store: &Store,
-    metrics_store: &Store,
-) -> Result<(), Error> {
-    for (metric, props) in vec![
-        (dcat_mqa::BYTE_SIZE_AVAILABILITY, vec![dcat::BYTE_SIZE]),
-        (dcat_mqa::DATE_ISSUED_AVAILABILITY, vec![dcterms::ISSUED]),
-        (
-            dcat_mqa::DATE_MODIFIED_AVAILABILITY,
-            vec![dcterms::MODIFIED],
-        ),
-        (
-            dcat_mqa::DOWNLOAD_URL_AVAILABILITY,
-            vec![dcat::DOWNLOAD_URL],
-        ),
-        (dcat_mqa::RIGHTS_AVAILABILITY, vec![dcterms::RIGHTS]),
-        (dcat_mqa::FORMAT_AVAILABILITY, vec![dcterms::FORMAT]),
-        (dcat_mqa::LICENSE_AVAILABILITY, vec![dcterms::LICENSE]),
-        (dcat_mqa::MEDIA_TYPE_AVAILABILITY, vec![dcat::MEDIA_TYPE]),
-    ] {
-        add_quality_measurement(
-            metric,
-            dist_assessment_node,
-            dist_node.into(),
-            props
-                .into_iter()
-                .any(|p| has_property(dist_node.into(), p, store)),
-            metrics_store,
-        )?;
-    }
-
-    Ok(())
-}
-
 async fn check_format_and_media_type_alignment(
     dist_assessment_node: NamedNodeRef<'_>,
     dist_node: NamedNodeRef<'_>,
@@ -347,31 +391,13 @@ async fn check_format_and_media_type_alignment(
     let has_format_property = has_property(dist_node.into(), dcterms::FORMAT, store);
     let has_media_type_property = has_property(dist_node.into(), dcat::MEDIA_TYPE, store);
 
-    let mut formats: Vec<String> = Vec::new();
-    list_formats(dist_node, store).for_each(|mt| match mt {
-        Ok(Quad {
-            object: Term::NamedNode(nn),
-            ..
-        }) => formats.push(nn.as_str().to_string()),
-        _ => {}
-    });
-
     if has_format_property {
-        is_format_aligned = futures::stream::iter(formats)
-            .any(|format| async move {
-                valid_file_type(format.to_string()).await
-                    || valid_media_type(format.to_string()).await
-            })
-            .await;
+        is_format_aligned =
+            any_valid_in_reference_data(list_format_uris(dist_node, store), valid_format_or_media_type)
+                .await;
 
         if is_format_aligned {
-            is_format_rdf = list_formats(dist_node, store).any(|mt| match mt {
-                Ok(Quad {
-                    object: Term::NamedNode(nn),
-                    ..
-                }) => is_rdf_format(nn.as_str()),
-                _ => false,
-            });
+            is_format_rdf = formats_include_rdf(dist_node, store);
 
             machine_interpretable_derived_from = Some(add_quality_measurement(
                 dcat_mqa::FORMAT_MEDIA_TYPE_MACHINE_INTERPRETABLE,
@@ -391,22 +417,12 @@ async fn check_format_and_media_type_alignment(
         }
     }
 
-    let mut media_types: Vec<String> = Vec::new();
-    list_media_types(dist_node, store).for_each(|mt| match mt {
-        Ok(Quad {
-            object: Term::NamedNode(nn),
-            ..
-        }) => media_types.push(nn.as_str().to_string()),
-        _ => {}
-    });
-
     if has_media_type_property {
-        is_media_type_aligned = futures::stream::iter(media_types)
-            .any(|media_type| async move {
-                valid_file_type(media_type.to_string()).await
-                    || valid_media_type(media_type.to_string()).await
-            })
-            .await;
+        is_media_type_aligned = any_valid_in_reference_data(
+            list_media_type_uris(dist_node, store),
+            valid_format_or_media_type,
+        )
+        .await;
     }
 
     add_quality_measurement(
@@ -437,19 +453,10 @@ async fn check_license_metrics(
 
     let has_license_property = has_property(dist_node.into(), dcterms::LICENSE, store);
 
-    let mut licenses: Vec<String> = Vec::new();
-    list_licenses(dist_node, store).for_each(|mt| match mt {
-        Ok(Quad {
-            object: Term::NamedNode(nn),
-            ..
-        }) => licenses.push(nn.as_str().to_string()),
-        _ => {}
-    });
-
     if has_license_property {
-        is_open_license = futures::stream::iter(licenses)
-            .any(|license| async move { valid_open_license(license.to_string()).await })
-            .await;
+        is_open_license =
+            any_valid_in_reference_data(list_license_uris(dist_node, store), valid_open_license)
+                .await;
 
         add_quality_measurement(
             dcat_mqa::KNOWN_LICENSE,
