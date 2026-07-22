@@ -1,9 +1,13 @@
 use cached::proc_macro::cached;
 use http::{HeaderMap, HeaderValue};
 use lazy_static::lazy_static;
+use serde::de::DeserializeOwned;
 use serde_derive::Deserialize;
 use std::collections::HashMap;
 use std::env;
+
+const REFERENCE_DATA_CACHE_TTL_SECS: u64 = 86400;
+const _: () = assert!(REFERENCE_DATA_CACHE_TTL_SECS == 86400);
 
 lazy_static! {
     pub static ref REFERENCE_DATA_BASE_URL: String = env::var("REFERENCE_DATA_BASE_URL")
@@ -74,6 +78,34 @@ pub struct AccessRight {
     pub label: std::collections::HashMap<String, String>,
 }
 
+trait ReferenceDataItem {
+    fn uri(&self) -> &str;
+}
+
+impl ReferenceDataItem for MediaType {
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+}
+
+impl ReferenceDataItem for FileType {
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+}
+
+impl ReferenceDataItem for OpenLicense {
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+}
+
+impl ReferenceDataItem for AccessRight {
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+}
+
 pub fn strip_http_scheme(uri: String) -> String {
     uri.replace("http://", "").replace("https://", "")
 }
@@ -115,114 +147,77 @@ fn construct_headers() -> HeaderMap {
     headers
 }
 
-#[cached(time = 86400)]
-pub async fn get_remote_media_types() -> Option<HashMap<String, MediaType>> {
+fn items_to_map<T: ReferenceDataItem>(items: Vec<T>) -> HashMap<String, T> {
+    items
+        .into_iter()
+        .map(|item| (strip_http_scheme(item.uri().to_string()), item))
+        .collect()
+}
+
+async fn fetch_reference_data<C, T, F>(path: &str, label: &str, extract: F) -> Option<HashMap<String, T>>
+where
+    C: DeserializeOwned,
+    T: ReferenceDataItem,
+    F: FnOnce(C) -> Vec<T>,
+{
+    let url = format!("{}{path}", REFERENCE_DATA_BASE_URL.as_str());
     let response = reqwest::Client::new()
-        .get(format!("{}/reference-data/iana/media-types", REFERENCE_DATA_BASE_URL.to_string()).as_str())
+        .get(url)
         .headers(construct_headers())
         .send()
         .await;
 
     match response {
-        Ok(resp) => match resp.json::<MediaTypeCollection>().await {
-            Ok(json) => Some(
-                json.media_types
-                    .into_iter()
-                    .map(|ft| (strip_http_scheme(ft.uri.clone()), ft))
-                    .collect::<HashMap<String, MediaType>>(),
-            ),
+        Ok(resp) => match resp.json::<C>().await {
+            Ok(json) => Some(items_to_map(extract(json))),
             Err(e) => {
-                tracing::warn!("Cannot get remote media-types {}", e);
+                tracing::warn!("Cannot get remote {label} {e}");
                 None
             }
         },
         Err(e) => {
-            tracing::warn!("Cannot get remote media-types {}", e);
+            tracing::warn!("Cannot get remote {label} {e}");
             None
         }
     }
+}
+
+#[cached(time = 86400)]
+pub async fn get_remote_media_types() -> Option<HashMap<String, MediaType>> {
+    fetch_reference_data(
+        "/reference-data/iana/media-types",
+        "media-types",
+        |json: MediaTypeCollection| json.media_types,
+    )
+    .await
 }
 
 #[cached(time = 86400)]
 pub async fn get_remote_file_types() -> Option<HashMap<String, FileType>> {
-    let response = reqwest::Client::new()
-        .get(format!("{}/reference-data/eu/file-types", REFERENCE_DATA_BASE_URL.to_string()).as_str())
-        .headers(construct_headers())
-        .send()
-        .await;
-
-    match response {
-        Ok(resp) => match resp.json::<FileTypeCollection>().await {
-            Ok(json) => Some(
-                json.file_types
-                    .into_iter()
-                    .map(|ft| (strip_http_scheme(ft.uri.clone()), ft))
-                    .collect::<HashMap<String, FileType>>(),
-            ),
-            Err(e) => {
-                tracing::warn!("Cannot get remote file-types {}", e);
-                None
-            }
-        },
-        Err(e) => {
-            tracing::warn!("Cannot get remote file-types {}", e);
-            None
-        }
-    }
+    fetch_reference_data(
+        "/reference-data/eu/file-types",
+        "file-types",
+        |json: FileTypeCollection| json.file_types,
+    )
+    .await
 }
 
 #[cached(time = 86400)]
 pub async fn get_remote_open_licenses() -> Option<HashMap<String, OpenLicense>> {
-    let response = reqwest::Client::new()
-        .get(format!("{}/reference-data/open-licenses", REFERENCE_DATA_BASE_URL.to_string()).as_str())
-        .headers(construct_headers())
-        .send()
-        .await;
-
-    match response {
-        Ok(resp) => match resp.json::<OpenLicenseCollection>().await {
-            Ok(json) => Some(
-                json.open_licenses
-                    .into_iter()
-                    .map(|ft| (strip_http_scheme(ft.uri.clone()), ft))
-                    .collect::<HashMap<String, OpenLicense>>(),
-            ),
-            Err(e) => {
-                tracing::warn!("Cannot get remote open-licenses {}", e);
-                None
-            }
-        },
-        Err(e) => {
-            tracing::warn!("Cannot get remote open-licenses {}", e);
-            None
-        }
-    }
+    fetch_reference_data(
+        "/reference-data/open-licenses",
+        "open-licenses",
+        |json: OpenLicenseCollection| json.open_licenses,
+    )
+    .await
 }
 
 #[cached(time = 86400)]
 pub async fn get_remote_access_rights() -> Option<HashMap<String, AccessRight>> {
-    let response = reqwest::Client::new()
-        .get(format!("{}/reference-data/eu/access-rights", REFERENCE_DATA_BASE_URL.to_string()).as_str())
-        .headers(construct_headers())
-        .send()
-        .await;
-
-    match response {
-        Ok(resp) => match resp.json::<AccessRightsCollection>().await {
-            Ok(json) => Some(
-                json.access_rights
-                    .into_iter()
-                    .map(|ar| (strip_http_scheme(ar.uri.clone()), ar))
-                    .collect::<HashMap<String, AccessRight>>(),
-            ),
-            Err(e) => {
-                tracing::warn!("Cannot get remote access-rights {}", e);
-                None
-            }
-        },
-        Err(e) => {
-            tracing::warn!("Cannot get remote access-rights {}", e);
-            None
-        }
-    }
+    fetch_reference_data(
+        "/reference-data/eu/access-rights",
+        "access-rights",
+        |json: AccessRightsCollection| json.access_rights,
+    )
+    .await
 }
