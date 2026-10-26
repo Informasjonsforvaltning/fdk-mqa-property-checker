@@ -504,11 +504,19 @@ mod tests {
         ))
     }
 
-    fn set_reference_data_base_url(server: &httpmock::MockServer) {
-        env::set_var(
-            "REFERENCE_DATA_BASE_URL",
-            format!("http://{}", server.address()),
-        );
+    lazy_static::lazy_static! {
+        /// One mock server for the whole test binary. `reference_data.rs` reads
+        /// `REFERENCE_DATA_BASE_URL` once (lazy_static) and its `cached` getters keep responses
+        /// for a day, so every test must point at the same server.
+        static ref REFERENCE_DATA_MOCK: httpmock::MockServer = {
+            let server = setup_reference_data_mock();
+            env::set_var("REFERENCE_DATA_BASE_URL", format!("http://{}", server.address()));
+            server
+        };
+    }
+
+    fn use_reference_data_mock() {
+        lazy_static::initialize(&REFERENCE_DATA_MOCK);
     }
 
     fn setup_reference_data_mock() -> httpmock::MockServer {
@@ -574,27 +582,6 @@ mod tests {
                             {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}},
                             {"uri":"http://publications.europa.eu/resource/authority/access-right/RESTRICTED","code":"RESTRICTED","label":{"en":"restricted"}},
                             {"uri":"http://publications.europa.eu/resource/authority/access-right/SENSITIVE","code":"SENSITIVE","label":{"en":"sensitive"}}
-                        ]
-                    }
-                "#,
-                );
-        });
-
-        server
-    }
-
-    fn setup_access_rights_mock() -> httpmock::MockServer {
-        let server = httpmock::MockServer::start();
-
-        server.mock(|when, then| {
-            when.path("/reference-data/eu/access-rights");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(
-                    r#"
-                    {
-                        "accessRights":[
-                            {"uri":"http://publications.europa.eu/resource/authority/access-right/PUBLIC","code":"PUBLIC","label":{"en":"public"}}
                         ]
                     }
                 "#,
@@ -707,8 +694,7 @@ mod tests {
 
     #[test]
     fn test_parse_graph_and_collect_metrics() {
-        let server = setup_reference_data_mock();
-        set_reference_data_base_url(&server);
+        use_reference_data_mock();
 
         let mqa_graph = run_metrics_on_ttl(include_str!("../tests/data/dataset_event.ttl"));
 
@@ -799,14 +785,11 @@ mod tests {
         } else {
             panic!("Distribution assessment is not a named node")
         };
-
-        env::remove_var("REFERENCE_DATA_BASE_URL");
     }
 
     #[test]
     fn test_access_rights_vocabulary_alignment_valid() {
-        let server = setup_access_rights_mock();
-        set_reference_data_base_url(&server);
+        use_reference_data_mock();
 
         let input_ttl = r#"
 @prefix dcat: <http://www.w3.org/ns/dcat#> .
@@ -825,14 +808,11 @@ mod tests {
         parse_turtle(&store, mqa_graph).unwrap();
 
         assert_measurement_value(&store, dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT, true);
-
-        env::remove_var("REFERENCE_DATA_BASE_URL");
     }
 
     #[test]
     fn test_access_rights_vocabulary_alignment_invalid() {
-        let server = setup_access_rights_mock();
-        set_reference_data_base_url(&server);
+        use_reference_data_mock();
 
         let input_ttl = r#"
 @prefix dcat: <http://www.w3.org/ns/dcat#> .
@@ -851,14 +831,11 @@ mod tests {
         parse_turtle(&store, mqa_graph).unwrap();
 
         assert_measurement_value(&store, dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT, false);
-
-        env::remove_var("REFERENCE_DATA_BASE_URL");
     }
 
     #[test]
     fn test_access_rights_vocabulary_alignment_no_access_rights() {
-        let server = setup_access_rights_mock();
-        set_reference_data_base_url(&server);
+        use_reference_data_mock();
 
         let input_ttl = r#"
 @prefix dcat: <http://www.w3.org/ns/dcat#> .
@@ -875,7 +852,5 @@ mod tests {
         parse_turtle(&store, mqa_graph).unwrap();
 
         assert_measurement_value(&store, dcat_mqa::ACCESS_RIGHTS_VOCABULARY_ALIGNMENT, false);
-
-        env::remove_var("REFERENCE_DATA_BASE_URL");
     }
 }
